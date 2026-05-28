@@ -1,18 +1,13 @@
 """
-NV2 Loteo Tintorería – Streamlit App v2
-Migrado desde Google Colab. Motor idéntico, UI nueva.
+NV2 Loteo Tintorería – Streamlit App v3
+Diseño: secciones colapsables en área principal, sidebar solo para perfiles y ajustes rápidos.
 """
-
 import io, sys, os, json, base64
 from datetime import datetime
-from copy import deepcopy
-
 import pandas as pd
-import numpy as np
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(__file__))
-
 from engine.loader import load_inputs
 from engine.loteo import run_loteo, build_reports
 from ui.charts import (
@@ -25,599 +20,611 @@ st.set_page_config(
     page_title="NV2 Loteo Tintorería",
     page_icon="🧶",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ── Session state init ─────────────────────────────────────────────────────
+# ── CSS ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+.section-header {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 18px;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #1e293b;
+}
+.kpi-box {
+    background: #f1f5f9;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+}
+div[data-testid="stDataEditor"] { border-radius: 6px; }
+.stButton > button[kind="primary"] {
+    background: #2563eb;
+    border: none;
+    border-radius: 6px;
+}
+.info-note {
+    background: #eff6ff;
+    border-left: 3px solid #3b82f6;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 0.88rem;
+    color: #1e40af;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Session state ──────────────────────────────────────────────────────────
 DEFAULTS = {
-    "run_history": [],
-    "last_result": None,
-    "df_data": None,
-    "df_cap": None,
-    "params": None,
-    "raw_file_bytes": None,
-    "raw_file_name": None,
-    # editable tables (DataFrames)
+    "run_history": [], "last_result": None,
+    "df_data": None, "df_cap": None, "params": None,
+    "raw_file_bytes": None, "raw_file_name": None,
+    "cap_applied": False,          # did user click Apply on capacidades?
     "tbl_capacidades": None,
     "tbl_reglas_anchos": None,
     "tbl_restricciones_ancho": None,
     "tbl_restricciones_color": None,
     "tbl_restricciones_familia": None,
     "tbl_combinaciones": None,
-    # profiles
-    "profiles": {},          # name -> profile dict
-    "active_profile": None,
+    "profiles": {}, "active_profile": None,
+    # sidebar config values stored so they survive rerun
+    "cfg": {},
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── Helpers ────────────────────────────────────────────────────────────────
-def fmt_lbs(v):
-    return f"{v:,.0f}"
+# ── Empty-table factories ──────────────────────────────────────────────────
+def empty_cap():  return pd.DataFrame(columns=["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX"])
+def empty_ra():   return pd.DataFrame(columns=["ANCHO_1","ANCHO_2","CAPACIDAD_PRIORIDAD_1","CAPACIDAD_PRIORIDAD_2","CAPACIDAD_PRIORIDAD_3"])
+def empty_ras():  return pd.DataFrame(columns=["STYLE","LIMITE_ANCHO","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
+def empty_rc():   return pd.DataFrame(columns=["COLOR_R","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
+def empty_rf():   return pd.DataFrame(columns=["FAMILIA","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3","PRIORIDAD_4"])
+def empty_comb(): return pd.DataFrame(columns=["PRIORIDAD_1","PRIORIDAD_2"])
 
+def get_tbl(key, factory):
+    t = st.session_state[key]
+    return t if t is not None else factory()
 
-def empty_capacidades():
-    return pd.DataFrame(columns=["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX"])
+def fmt_lbs(v): return f"{v:,.0f}"
 
-
-def empty_reglas_anchos():
-    return pd.DataFrame(columns=["ANCHO_1","ANCHO_2","CAPACIDAD_PRIORIDAD_1","CAPACIDAD_PRIORIDAD_2","CAPACIDAD_PRIORIDAD_3"])
-
-
-def empty_restricciones_ancho():
-    return pd.DataFrame(columns=["STYLE","LIMITE_ANCHO","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
-
-
-def empty_restricciones_color():
-    return pd.DataFrame(columns=["COLOR_R","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
-
-
-def empty_restricciones_familia():
-    return pd.DataFrame(columns=["FAMILIA","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3","PRIORIDAD_4"])
-
-
-def empty_combinaciones():
-    return pd.DataFrame(columns=["PRIORIDAD_1","PRIORIDAD_2"])
-
-
-def df_to_json_safe(df):
-    if df is None or df.empty:
-        return []
+def df_to_json(df):
+    if df is None or df.empty: return []
     return df.where(pd.notna(df), None).to_dict(orient="records")
 
+def json_to_df(records, factory):
+    return pd.DataFrame(records) if records else factory()
 
-def json_safe_to_df(records, empty_fn):
-    if not records:
-        return empty_fn()
-    return pd.DataFrame(records)
-
-
-def export_excel(result: dict) -> bytes:
+# ── Excel export ───────────────────────────────────────────────────────────
+def export_excel(result):
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        result["detalle"].to_excel(writer, index=False, sheet_name="DETALLE_LOTES")
-        result["resumen"].to_excel(writer, index=False, sheet_name="RESUMEN_LOTES")
-        result["excedentes"].to_excel(writer, index=False, sheet_name="EXCEDENTES")
-        result["params_out"].to_excel(writer, index=False, sheet_name="PARAMETROS")
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        result["detalle"].to_excel(w, index=False, sheet_name="DETALLE_LOTES")
+        result["resumen"].to_excel(w, index=False, sheet_name="RESUMEN_LOTES")
+        result["excedentes"].to_excel(w, index=False, sheet_name="EXCEDENTES")
+        result["params_out"].to_excel(w, index=False, sheet_name="PARAMETROS")
         for key, df in result["reports"].items():
-            if not df.empty:
-                df.to_excel(writer, index=False, sheet_name=key[:31])
+            if not df.empty: df.to_excel(w, index=False, sheet_name=key[:31])
     return buf.getvalue()
 
-
-def build_profile_dict(overrides, cfg_tables):
-    """Serialize current config to a JSON-safe dict."""
-    profile = {"overrides": overrides, "tables": {}}
-    for k, df in cfg_tables.items():
-        profile["tables"][k] = df_to_json_safe(df)
-    # also store raw file bytes as base64 if available
+# ── Profile helpers ────────────────────────────────────────────────────────
+def build_profile(overrides):
+    p = {"overrides": overrides, "tables": {
+        "capacidades":          df_to_json(get_tbl("tbl_capacidades",empty_cap)),
+        "reglas_anchos":        df_to_json(get_tbl("tbl_reglas_anchos",empty_ra)),
+        "restricciones_ancho":  df_to_json(get_tbl("tbl_restricciones_ancho",empty_ras)),
+        "restricciones_color":  df_to_json(get_tbl("tbl_restricciones_color",empty_rc)),
+        "restricciones_familia":df_to_json(get_tbl("tbl_restricciones_familia",empty_rf)),
+        "combinaciones":        df_to_json(get_tbl("tbl_combinaciones",empty_comb)),
+    }}
     if st.session_state.raw_file_bytes:
-        profile["file_b64"] = base64.b64encode(st.session_state.raw_file_bytes).decode()
-        profile["file_name"] = st.session_state.raw_file_name
-    return profile
+        p["file_b64"]  = base64.b64encode(st.session_state.raw_file_bytes).decode()
+        p["file_name"] = st.session_state.raw_file_name or "archivo.xlsx"
+    return p
 
-
-def apply_profile(profile: dict):
-    """Load a profile dict back into session state."""
-    st.session_state.tbl_capacidades = json_safe_to_df(profile["tables"].get("capacidades"), empty_capacidades)
-    st.session_state.tbl_reglas_anchos = json_safe_to_df(profile["tables"].get("reglas_anchos"), empty_reglas_anchos)
-    st.session_state.tbl_restricciones_ancho = json_safe_to_df(profile["tables"].get("restricciones_ancho"), empty_restricciones_ancho)
-    st.session_state.tbl_restricciones_color = json_safe_to_df(profile["tables"].get("restricciones_color"), empty_restricciones_color)
-    st.session_state.tbl_restricciones_familia = json_safe_to_df(profile["tables"].get("restricciones_familia"), empty_restricciones_familia)
-    st.session_state.tbl_combinaciones = json_safe_to_df(profile["tables"].get("combinaciones"), empty_combinaciones)
-    # restore file if embedded
+def apply_profile(profile):
+    t = profile.get("tables", {})
+    st.session_state.tbl_capacidades          = json_to_df(t.get("capacidades"), empty_cap)
+    st.session_state.tbl_reglas_anchos        = json_to_df(t.get("reglas_anchos"), empty_ra)
+    st.session_state.tbl_restricciones_ancho  = json_to_df(t.get("restricciones_ancho"), empty_ras)
+    st.session_state.tbl_restricciones_color  = json_to_df(t.get("restricciones_color"), empty_rc)
+    st.session_state.tbl_restricciones_familia= json_to_df(t.get("restricciones_familia"), empty_rf)
+    st.session_state.tbl_combinaciones        = json_to_df(t.get("combinaciones"), empty_comb)
+    st.session_state.cfg = profile.get("overrides", {})
+    st.session_state.cap_applied = False
     if "file_b64" in profile:
         raw = base64.b64decode(profile["file_b64"])
         st.session_state.raw_file_bytes = raw
-        st.session_state.raw_file_name = profile.get("file_name","archivo.xlsx")
-        # reload data
+        st.session_state.raw_file_name  = profile.get("file_name","archivo.xlsx")
         try:
             df_data, df_cap, params, _ = load_inputs(io.BytesIO(raw))
             st.session_state.df_data = df_data
-            st.session_state.df_cap = df_cap
-            st.session_state.params = params
-        except Exception:
-            pass
-    return profile.get("overrides", {})
+            st.session_state.df_cap  = df_cap
+            st.session_state.params  = params
+        except Exception: pass
 
-
-def load_tables_from_excel(xlsm_path):
-    """Extract editable tables from the uploaded Excel."""
-    xls = pd.ExcelFile(xlsm_path, engine="openpyxl")
-
-    def safe_read(sheet, empty_fn):
+def load_tables_from_excel(raw_bytes):
+    xls = pd.ExcelFile(io.BytesIO(raw_bytes), engine="openpyxl")
+    def sr(sheet, factory):
         if sheet in xls.sheet_names:
-            df = pd.read_excel(xlsm_path, sheet_name=sheet, engine="openpyxl")
+            df = pd.read_excel(io.BytesIO(raw_bytes), sheet_name=sheet, engine="openpyxl")
             df.columns = [str(c).strip() for c in df.columns]
             return df
-        return empty_fn()
+        return factory()
+    st.session_state.tbl_capacidades          = sr("CAPACIDADES_TINTO",       empty_cap)
+    st.session_state.tbl_reglas_anchos        = sr("REGLAS_ANCHOS_COMBINADOS", empty_ra)
+    st.session_state.tbl_restricciones_ancho  = sr("RESTRICCIONES_ANCHO",      empty_ras)
+    st.session_state.tbl_restricciones_color  = sr("RESTRICCIONES_COLOR",      empty_rc)
+    st.session_state.tbl_restricciones_familia= sr("RESTRICCIONES_FAMILIA",    empty_rf)
+    st.session_state.tbl_combinaciones        = sr("COMBINACIONES_PRIORIDAD",   empty_comb)
+    st.session_state.cap_applied = False
 
-    st.session_state.tbl_capacidades      = safe_read("CAPACIDADES_TINTO",       empty_capacidades)
-    st.session_state.tbl_reglas_anchos    = safe_read("REGLAS_ANCHOS_COMBINADOS", empty_reglas_anchos)
-    st.session_state.tbl_restricciones_ancho   = safe_read("RESTRICCIONES_ANCHO",  empty_restricciones_ancho)
-    st.session_state.tbl_restricciones_color   = safe_read("RESTRICCIONES_COLOR",  empty_restricciones_color)
-    st.session_state.tbl_restricciones_familia = safe_read("RESTRICCIONES_FAMILIA",empty_restricciones_familia)
-    st.session_state.tbl_combinaciones    = safe_read("COMBINACIONES_PRIORIDAD",   empty_combinaciones)
+# ── Param rebuild helpers ──────────────────────────────────────────────────
+def rebuild_all_params(params2):
+    def rebuild_familia(df):
+        out = {}
+        if df is None or df.empty: return out
+        pcols = [c for c in df.columns if c.upper().startswith("PRIORIDAD")]
+        for _, r in df.iterrows():
+            f = str(r.get("FAMILIA","")).strip().upper()
+            if not f: continue
+            caps = [float(r[pc]) for pc in pcols if pd.notna(r.get(pc))]
+            if caps: out[f] = caps
+        return out
+    def rebuild_color(df):
+        out = {}
+        if df is None or df.empty: return out
+        for _, r in df.iterrows():
+            c = str(r.get("COLOR_R","")).strip().upper()
+            v = r.get("PRIORIDAD_1", None)
+            out[c] = float(v) if pd.notna(v) else None
+        return out
+    def rebuild_ancho(df):
+        out = {}
+        if df is None or df.empty: return out
+        pcols = [c for c in df.columns if c.upper().startswith("PRIORIDAD")]
+        for _, r in df.iterrows():
+            style = str(r.get("STYLE","")).strip().upper()
+            if not style: continue
+            lim = r.get("LIMITE_ANCHO", None)
+            try: lim = float(lim) if pd.notna(lim) else None
+            except: lim = None
+            caps = []
+            for pc in pcols:
+                v = r.get(pc, None)
+                if pd.notna(v):
+                    try: caps.append(float(v))
+                    except: pass
+            out[style] = {"limite": lim, "prioridades": caps}
+        return out
+    def rebuild_reglas(df):
+        out = []
+        if df is None or df.empty: return out
+        pcols = [c for c in df.columns if c.upper().startswith("CAPACIDAD_PRIORIDAD")]
+        for _, r in df.iterrows():
+            try: a1 = float(r.get("ANCHO_1",0)); a2 = float(r.get("ANCHO_2",0))
+            except: continue
+            caps = [float(r[pc]) for pc in pcols if pd.notna(r.get(pc))]
+            if caps: out.append({"a1": a1, "a2": a2, "prioridades": caps})
+        return out
+    def rebuild_comb(df):
+        pairs = set()
+        if df is None or df.empty: return pairs
+        for _, r in df.iterrows():
+            a = str(r.get("PRIORIDAD_1","")).strip()
+            b = str(r.get("PRIORIDAD_2","")).strip()
+            if a and b: pairs.add((a,b)); pairs.add((b,a))
+        return pairs
 
+    params2["RESTRICCIONES_FAMILIA"]   = rebuild_familia(st.session_state.tbl_restricciones_familia)
+    params2["RESTRICCIONES_COLOR"]     = rebuild_color(st.session_state.tbl_restricciones_color)
+    params2["RESTRICCIONES_ANCHO"]     = rebuild_ancho(st.session_state.tbl_restricciones_ancho)
+    params2["REGLAS_ANCHOS_COMBINADOS"]= rebuild_reglas(st.session_state.tbl_reglas_anchos)
+    comb = rebuild_comb(st.session_state.tbl_combinaciones)
+    if comb: params2["MIX_ALLOWED"] = comb
+    return params2
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
+#  SIDEBAR  — perfiles + ajustes avanzados
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("🧶 NV2 Loteo")
     st.caption("Tintorería · Planificación de lotes")
     st.divider()
 
-    # ── 1. Carga de archivo ────────────────────────────────────────────────
-    st.subheader("📁 Archivo")
-    uploaded = st.file_uploader(
-        "Sube tu archivo Excel (.xlsx / .xlsm)",
-        type=["xlsx", "xlsm"],
-        key="file_upload",
-    )
+    # Perfiles ─────────────────────────────────────────────────────────────
+    st.subheader("💾 Perfiles")
+    profiles = st.session_state.profiles
+    pnames   = list(profiles.keys())
+    if pnames:
+        sel = st.selectbox("Cargar perfil", ["— seleccionar —"] + pnames, key="sel_profile")
+        if sel != "— seleccionar —" and st.button("📥 Aplicar", use_container_width=True):
+            apply_profile(profiles[sel])
+            st.success(f"Perfil '{sel}' aplicado")
+            st.rerun()
+
+    json_up = st.file_uploader("Importar JSON", type=["json"], key="json_upload")
+    if json_up:
+        try:
+            loaded = json.load(json_up)
+            nm = json_up.name.replace(".json","")
+            profiles[nm] = loaded
+            st.session_state.profiles = profiles
+            st.success(f"'{nm}' importado")
+        except Exception as e:
+            st.error(str(e))
+
+    st.divider()
+
+    # Ajustes avanzados (scoring, splits, flags) ──────────────────────────
+    p   = st.session_state.params or {}
+    cfg = st.session_state.cfg    or {}
+    def cv(k, d): return cfg.get(k, p.get(k, d))
+
+    st.subheader("⚙️ Ajustes avanzados")
+
+    with st.expander("Scoring & Beam"):
+        beam_w       = st.number_input("BEAM_WIDTH",          value=int(cv("BEAM_WIDTH",3)),   min_value=1, step=1)
+        w_fill       = st.number_input("W_FILL",              value=float(cv("W_FILL",5.0)),   step=0.5)
+        w_cap_loss   = st.number_input("W_CAP_LOSS",          value=float(cv("W_CAP_LOSS",2.0)),step=0.5)
+        w_width_pref = st.number_input("W_WIDTH_PREF",        value=float(cv("W_WIDTH_PREF",2.0)),step=0.5)
+        w_1100       = st.number_input("W_1100_WIDTHS_STRICT",value=float(cv("W_1100_WIDTHS_STRICT",10.0)),step=1.0)
+        pref_list_str= st.text_input("WIDTH_PREF_LIST",       value=",".join(str(x) for x in cv("WIDTH_PREF_LIST",[2,3,1,4,5,6])))
+
+    with st.expander("Splits & Scrap"):
+        split_default= st.number_input("SPLIT_MIN_LBS_DEFAULT",value=float(cv("SPLIT_MIN_LBS_DEFAULT",100)),step=10.0)
+        split_ancho18= st.number_input("SPLIT_MIN_LBS_ANCHO18",value=float(cv("SPLIT_MIN_LBS_ANCHO18",200)),step=10.0)
+        scrap_rem    = st.checkbox("SCRAP_REMAINDER_BELOW_SPLIT_MIN", value=bool(int(cv("SCRAP_REMAINDER_BELOW_SPLIT_MIN",1))))
+
+    with st.expander("Flags"):
+        overshoot    = st.checkbox("OVERSHOOT_ENABLE",             value=bool(int(cv("OVERSHOOT_ENABLE",1))))
+        undershoot   = st.checkbox("UNDERSHOOT_ENABLE",            value=bool(int(cv("UNDERSHOOT_ENABLE",1))))
+        upgrade_cat  = st.checkbox("UPGRADE_CATEGORIA",            value=bool(int(cv("UPGRADE_CATEGORIA",1))))
+        try_all      = st.checkbox("TRY_ALL_PRIORITIES",           value=bool(int(cv("TRY_ALL_PRIORITIES",1))))
+        apply_bleach = st.checkbox("APPLY_RULES_BLEACH",           value=bool(int(cv("APPLY_RULES_BLEACH",0))))
+        ancho18_spill= st.checkbox("ANCHO18_ALLOW_SPILLOVER_2600", value=bool(int(cv("ANCHO18_ALLOW_SPILLOVER_2600",0))))
+
+    with st.expander("Reglas de orden"):
+        rule_order     = st.text_input("RULE_ORDER",     value=str(cv("RULE_ORDER","ANCHO18>COMBO_ANCHOS>COLOR_R>FAMILIA>DEFAULT")))
+        priority_order = st.text_input("PRIORITY_ORDER", value=str(cv("PRIORITY_ORDER","")))
+        ancho18_max    = st.text_input("ANCHO18_ALLOWED_MAX_DYE",
+                                       value=",".join(str(int(x)) for x in cv("ANCHO18_ALLOWED_MAX_DYE",{2200,1100})))
+
+    # collect overrides (section-1 values are read from main area widgets below)
+    adv_overrides = {
+        "BEAM_WIDTH": beam_w, "W_FILL": w_fill, "W_CAP_LOSS": w_cap_loss,
+        "W_WIDTH_PREF": w_width_pref, "W_1100_WIDTHS_STRICT": w_1100,
+        "WIDTH_PREF_LIST": pref_list_str,
+        "SPLIT_MIN_LBS_DEFAULT": split_default, "SPLIT_MIN_LBS_ANCHO18": split_ancho18,
+        "SCRAP_REMAINDER_BELOW_SPLIT_MIN": int(scrap_rem),
+        "OVERSHOOT_ENABLE": int(overshoot), "UNDERSHOOT_ENABLE": int(undershoot),
+        "UPGRADE_CATEGORIA": int(upgrade_cat), "TRY_ALL_PRIORITIES": int(try_all),
+        "APPLY_RULES_BLEACH": int(apply_bleach), "ANCHO18_ALLOW_SPILLOVER_2600": int(ancho18_spill),
+        "RULE_ORDER": rule_order, "PRIORITY_ORDER": priority_order,
+        "ANCHO18_ALLOWED_MAX_DYE": ancho18_max,
+    }
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN — Título
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("## 🧶 NV2 Loteo Tintorería")
+st.caption("Optimización · Lotes · Asignación de Pedidos")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECCIÓN 1 — Carga de Archivo
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
+    up_col, info_col = st.columns([2, 1])
+    with up_col:
+        uploaded = st.file_uploader(
+            "Sube tu archivo Excel (.xlsx / .xlsm)",
+            type=["xlsx","xlsm"], key="file_upload",
+            label_visibility="collapsed",
+        )
+    with info_col:
+        if st.session_state.df_data is not None:
+            df_data = st.session_state.df_data
+            st.success(f"✅ **{st.session_state.raw_file_name}**")
+            st.caption(f"{len(df_data):,} filas · LBS: {fmt_lbs(df_data['TOTAL'].sum())}")
+        else:
+            st.info("Sin archivo cargado")
 
     if uploaded is not None:
         file_bytes = uploaded.read()
         if file_bytes != st.session_state.raw_file_bytes:
-            with st.spinner("Leyendo archivo…"):
+            with st.spinner("Leyendo…"):
                 try:
-                    buf = io.BytesIO(file_bytes)
-                    df_data, df_cap, params, hdr_row = load_inputs(buf)
+                    df_data, df_cap, params, hdr = load_inputs(io.BytesIO(file_bytes))
                     st.session_state.df_data = df_data
                     st.session_state.df_cap  = df_cap
                     st.session_state.params  = params
                     st.session_state.raw_file_bytes = file_bytes
                     st.session_state.raw_file_name  = uploaded.name
-                    load_tables_from_excel(io.BytesIO(file_bytes))
-                    st.success(f"✅ {len(df_data):,} filas · header fila {hdr_row+1}")
+                    load_tables_from_excel(file_bytes)
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
-                    st.stop()
 
-    st.divider()
-
-    # ── 2. Perfiles ────────────────────────────────────────────────────────
-    st.subheader("💾 Perfiles de Configuración")
-
-    profiles = st.session_state.profiles
-    profile_names = list(profiles.keys())
-
-    # Cargar perfil de sesión
-    if profile_names:
-        sel_profile = st.selectbox("Cargar perfil de sesión", ["— seleccionar —"] + profile_names, key="sel_profile")
-        if sel_profile != "— seleccionar —" and st.button("📥 Aplicar perfil", use_container_width=True):
-            apply_profile(profiles[sel_profile])
-            st.success(f"Perfil '{sel_profile}' aplicado")
-            st.rerun()
-
-    # Importar JSON
-    json_upload = st.file_uploader("Importar perfil (.json)", type=["json"], key="json_upload")
-    if json_upload is not None:
-        try:
-            loaded = json.load(json_upload)
-            pname = json_upload.name.replace(".json","")
-            profiles[pname] = loaded
-            st.session_state.profiles = profiles
-            st.success(f"Perfil '{pname}' importado")
-        except Exception as e:
-            st.error(f"Error al importar: {e}")
-
-    st.divider()
-
-    # ── 3. CONFIG editable ─────────────────────────────────────────────────
-    p = st.session_state.params or {}
-
-    if p:
-        st.subheader("⚙️ Parámetros CONFIG")
-
-        with st.expander("Anchos & SKU", expanded=True):
-            min_diff      = st.number_input("MIN_DIFF",   value=float(p.get("MIN_DIFF",1)),   step=0.5, format="%.1f")
-            max_diff      = st.number_input("MAX_DIFF",   value=float(p.get("MAX_DIFF",6)),   step=0.5, format="%.1f")
-            max_widths    = st.number_input("MAX_WIDTHS", value=int(p.get("MAX_WIDTHS",3)),   min_value=1, step=1)
-            max_sku       = st.number_input("MAX_SKU",    value=int(p.get("MAX_SKU",8)),      min_value=1, step=1)
-            widths_target = st.text_input("WIDTHS_TARGET_ORDER", value=str(p.get("WIDTHS_TARGET_ORDER","2>3>1")))
-            req_strict    = st.checkbox("REQUIRE_WIDTHS_STRICT", value=bool(int(p.get("REQUIRE_WIDTHS_STRICT",1))))
-
-        with st.expander("Splits & Scrap"):
-            split_default = st.number_input("SPLIT_MIN_LBS_DEFAULT", value=float(p.get("SPLIT_MIN_LBS_DEFAULT",100)), step=10.0)
-            split_ancho18 = st.number_input("SPLIT_MIN_LBS_ANCHO18", value=float(p.get("SPLIT_MIN_LBS_ANCHO18",200)), step=10.0)
-            scrap_rem     = st.checkbox("SCRAP_REMAINDER_BELOW_SPLIT_MIN", value=bool(int(p.get("SCRAP_REMAINDER_BELOW_SPLIT_MIN",1))))
-
-        with st.expander("Scoring & Beam"):
-            beam_w       = st.number_input("BEAM_WIDTH",        value=int(p.get("BEAM_WIDTH",3)),   min_value=1, step=1)
-            w_fill       = st.number_input("W_FILL",            value=float(p.get("W_FILL",5.0)),   step=0.5)
-            w_cap_loss   = st.number_input("W_CAP_LOSS",        value=float(p.get("W_CAP_LOSS",2.0)),step=0.5)
-            w_width_pref = st.number_input("W_WIDTH_PREF",      value=float(p.get("W_WIDTH_PREF",2.0)),step=0.5)
-            w_1100       = st.number_input("W_1100_WIDTHS_STRICT",value=float(p.get("W_1100_WIDTHS_STRICT",10.0)),step=1.0)
-            pref_list_str= st.text_input("WIDTH_PREF_LIST",     value=",".join(str(x) for x in p.get("WIDTH_PREF_LIST",[2,3,1,4,5,6])))
-
-        with st.expander("Reglas & Flags"):
-            overshoot      = st.checkbox("OVERSHOOT_ENABLE",              value=bool(int(p.get("OVERSHOOT_ENABLE",1))))
-            undershoot     = st.checkbox("UNDERSHOOT_ENABLE",             value=bool(int(p.get("UNDERSHOOT_ENABLE",1))))
-            upgrade_cat    = st.checkbox("UPGRADE_CATEGORIA",             value=bool(int(p.get("UPGRADE_CATEGORIA",1))))
-            try_all        = st.checkbox("TRY_ALL_PRIORITIES",            value=bool(int(p.get("TRY_ALL_PRIORITIES",1))))
-            apply_bleach   = st.checkbox("APPLY_RULES_BLEACH",            value=bool(int(p.get("APPLY_RULES_BLEACH",0))))
-            ancho18_spill  = st.checkbox("ANCHO18_ALLOW_SPILLOVER_2600",  value=bool(int(p.get("ANCHO18_ALLOW_SPILLOVER_2600",0))))
-            rule_order     = st.text_input("RULE_ORDER", value=str(p.get("RULE_ORDER","ANCHO18>COMBO_ANCHOS>COLOR_R>FAMILIA>DEFAULT")))
-            priority_order = st.text_input("PRIORITY_ORDER", value=str(p.get("PRIORITY_ORDER","")))
-            ancho18_max_dye= st.text_input("ANCHO18_ALLOWED_MAX_DYE",
-                                           value=",".join(str(int(x)) for x in p.get("ANCHO18_ALLOWED_MAX_DYE",{2200,1100})))
-
-        overrides = {
-            "MIN_DIFF": min_diff, "MAX_DIFF": max_diff,
-            "MAX_WIDTHS": max_widths, "MAX_SKU": max_sku,
-            "WIDTHS_TARGET_ORDER": widths_target,
-            "REQUIRE_WIDTHS_STRICT": int(req_strict),
-            "SPLIT_MIN_LBS_DEFAULT": split_default,
-            "SPLIT_MIN_LBS_ANCHO18": split_ancho18,
-            "SCRAP_REMAINDER_BELOW_SPLIT_MIN": int(scrap_rem),
-            "BEAM_WIDTH": beam_w, "W_FILL": w_fill, "W_CAP_LOSS": w_cap_loss,
-            "W_WIDTH_PREF": w_width_pref, "W_1100_WIDTHS_STRICT": w_1100,
-            "WIDTH_PREF_LIST": pref_list_str,
-            "OVERSHOOT_ENABLE": int(overshoot), "UNDERSHOOT_ENABLE": int(undershoot),
-            "UPGRADE_CATEGORIA": int(upgrade_cat), "TRY_ALL_PRIORITIES": int(try_all),
-            "APPLY_RULES_BLEACH": int(apply_bleach),
-            "ANCHO18_ALLOW_SPILLOVER_2600": int(ancho18_spill),
-            "RULE_ORDER": rule_order, "PRIORITY_ORDER": priority_order,
-            "ANCHO18_ALLOWED_MAX_DYE": ancho18_max_dye,
-        }
-
-        st.divider()
-
-        # ── Guardar perfil ─────────────────────────────────────────────────
-        st.subheader("💾 Guardar perfil actual")
-        new_profile_name = st.text_input("Nombre del perfil", placeholder="ej. Semana23_DYE", key="new_profile_name")
-        col_save, col_export = st.columns(2)
-
-        cfg_tables = {
-            "capacidades": st.session_state.tbl_capacidades or empty_capacidades(),
-            "reglas_anchos": st.session_state.tbl_reglas_anchos or empty_reglas_anchos(),
-            "restricciones_ancho": st.session_state.tbl_restricciones_ancho or empty_restricciones_ancho(),
-            "restricciones_color": st.session_state.tbl_restricciones_color or empty_restricciones_color(),
-            "restricciones_familia": st.session_state.tbl_restricciones_familia or empty_restricciones_familia(),
-            "combinaciones": st.session_state.tbl_combinaciones or empty_combinaciones(),
-        }
-
-        with col_save:
-            if st.button("💾 En sesión", use_container_width=True):
-                if new_profile_name.strip():
-                    profiles[new_profile_name.strip()] = build_profile_dict(overrides, cfg_tables)
-                    st.session_state.profiles = profiles
-                    st.success("Guardado")
-                else:
-                    st.warning("Ingresa un nombre")
-
-        with col_export:
-            profile_json = json.dumps(build_profile_dict(overrides, cfg_tables), indent=2, ensure_ascii=False)
-            fn = (new_profile_name.strip() or "perfil") + ".json"
-            st.download_button("📤 JSON", data=profile_json, file_name=fn,
-                               mime="application/json", use_container_width=True)
-
-        st.divider()
-        run_btn = st.button("▶ Correr Loteo", type="primary", use_container_width=True)
-    else:
-        overrides = {}
-        run_btn = False
-        cfg_tables = {}
-
+    # DATA preview
+    if st.session_state.df_data is not None:
+        with st.expander("🔍 Vista previa de DATA"):
+            df_data = st.session_state.df_data
+            mix_opts = ["Todos"] + sorted(df_data["MIX"].unique().tolist())
+            fc1, fc2 = st.columns([3,1])
+            mix_sel = fc1.selectbox("MIX", mix_opts, key="prev_mix", label_visibility="collapsed")
+            n_rows  = fc2.number_input("Filas", 5, 500, 50, key="prev_n", label_visibility="collapsed")
+            prev_df = df_data if mix_sel=="Todos" else df_data[df_data["MIX"]==mix_sel]
+            st.dataframe(prev_df.head(n_rows), use_container_width=True, height=220)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAIN AREA
+#  SECCIÓN 2 — Capacidad y Validación
 # ══════════════════════════════════════════════════════════════════════════════
-st.title("🧶 NV2 Loteo Tintorería")
+with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
+    st.markdown(
+        '<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b> para confirmar.</div>',
+        unsafe_allow_html=True,
+    )
 
-if st.session_state.df_data is None:
-    st.info("👈 Sube un archivo Excel en el panel izquierdo para comenzar.")
-    st.stop()
-
-df_data = st.session_state.df_data
-df_cap  = st.session_state.df_cap
-
-# ── Vista previa DATA ──────────────────────────────────────────────────────
-with st.expander("🔍 Vista previa de DATA", expanded=False):
-    col_f, col_n = st.columns([3,1])
-    with col_f:
-        mix_opts = ["Todos"] + sorted(df_data["MIX"].unique().tolist())
-        mix_sel = st.selectbox("Filtrar por MIX", mix_opts, key="prev_mix")
-    with col_n:
-        n_rows = st.number_input("Filas", min_value=5, max_value=500, value=50, step=10, key="prev_n")
-    prev_df = df_data if mix_sel=="Todos" else df_data[df_data["MIX"]==mix_sel]
-    st.dataframe(prev_df.head(n_rows), use_container_width=True, height=260)
-    st.caption(f"Total: {len(df_data):,} filas | LBS: {fmt_lbs(df_data['TOTAL'].sum())}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  PESTAÑA CONFIGURACIÓN DE TABLAS
-# ══════════════════════════════════════════════════════════════════════════════
-st.subheader("🗂️ Configuración de Tablas")
-
-tc1, tc2, tc3, tc4, tc5, tc6 = st.tabs([
-    "📦 Capacidades Tinto",
-    "🔗 Reglas Anchos Combinados",
-    "📐 Restricciones Ancho",
-    "🎨 Restricciones Color",
-    "👨‍👩‍👧 Restricciones Familia",
-    "⚖️ Combinaciones Prioridad",
-])
-
-# ── Tab: CAPACIDADES_TINTO ─────────────────────────────────────────────────
-with tc1:
-    st.markdown("**Categorías de capacidad** — define rangos, capacidad total y MIX. "
-                "Edita directamente en la tabla o agrega/elimina filas.")
-
-    if st.session_state.tbl_capacidades is None:
-        st.session_state.tbl_capacidades = empty_capacidades()
+    tbl_cap = get_tbl("tbl_capacidades", empty_cap)
 
     cap_edited = st.data_editor(
-        st.session_state.tbl_capacidades,
+        tbl_cap,
         num_rows="dynamic",
         use_container_width=True,
+        height=min(60 + 35 * max(len(tbl_cap), 1), 400),
         key="editor_cap",
         column_config={
-            "CATEGORIA":  st.column_config.TextColumn("Categoría", width="small"),
-            "MINIMO":     st.column_config.NumberColumn("Mínimo LBS", min_value=0, format="%d"),
-            "MAXIMO":     st.column_config.NumberColumn("Máximo LBS", min_value=0, format="%d"),
-            "CAPACIDAD":  st.column_config.NumberColumn("Capacidad Total LBS", min_value=0, format="%d"),
-            "MIX":        st.column_config.SelectboxColumn("MIX", options=["DYE","BLEACH"]),
+            "CATEGORIA": st.column_config.TextColumn("Categoría", width="small"),
+            "MINIMO":    st.column_config.NumberColumn("Mínimo (LBS)", min_value=0, format="%d"),
+            "MAXIMO":    st.column_config.NumberColumn("Máximo (LBS)", min_value=0, format="%d"),
+            "CAPACIDAD": st.column_config.NumberColumn("Capacidad Total (LBS)", min_value=0, format="%d"),
+            "MIX":       st.column_config.SelectboxColumn("MIX", options=["DYE","BLEACH"]),
         },
     )
-    st.session_state.tbl_capacidades = cap_edited
 
-    # Resumen visual
-    if not cap_edited.empty:
-        total_cap = pd.to_numeric(cap_edited["CAPACIDAD"], errors="coerce").sum()
-        st.caption(f"📊 {len(cap_edited)} categorías | Capacidad total: {fmt_lbs(total_cap)} LBS")
+    btn_col, stat_col = st.columns([1,3])
+    with btn_col:
+        if st.button("✅ Aplicar cambios de capacidad", type="primary", use_container_width=True):
+            st.session_state.tbl_capacidades = cap_edited
+            st.session_state.cap_applied = True
+            st.success("Capacidades actualizadas")
+    with stat_col:
+        if st.session_state.cap_applied:
+            cap_ok = get_tbl("tbl_capacidades", empty_cap)
+            if not cap_ok.empty:
+                total_c = pd.to_numeric(cap_ok["CAPACIDAD"], errors="coerce").sum()
+                n_invalidas = cap_ok[["MINIMO","MAXIMO","CAPACIDAD"]].isna().any(axis=1).sum()
+                st.caption(
+                    f"{'⚠️' if n_invalidas else '✅'} "
+                    f"{len(cap_ok)} categorías · "
+                    f"Capacidad total: **{fmt_lbs(total_c)} LBS** · "
+                    f"{'Filas incompletas: ' + str(n_invalidas) if n_invalidas else 'Sin errores'}"
+                )
+        else:
+            st.caption("ℹ️ Edita la tabla y presiona Aplicar para habilitar el loteo.")
 
-# ── Tab: REGLAS_ANCHOS_COMBINADOS ──────────────────────────────────────────
-with tc2:
-    st.markdown("**Combinaciones de anchos permitidas** — define qué pares de anchos pueden ir juntos "
-                "y en qué tamaños (prioridades de capacidad). Si la tabla está vacía, las combinaciones son libres.")
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECCIÓN 3 — Parámetros de Anchos y SKU
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("⚙️  Sección 3 — Parámetros de Loteo", expanded=False):
+    p   = st.session_state.params or {}
+    cfg = st.session_state.cfg    or {}
+    def cv(k, d): return cfg.get(k, p.get(k, d))
 
-    if st.session_state.tbl_reglas_anchos is None:
-        st.session_state.tbl_reglas_anchos = empty_reglas_anchos()
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        min_diff   = st.number_input("MIN_DIFF",   value=float(cv("MIN_DIFF",1)),   step=0.5, format="%.1f", help="Diferencia mínima entre anchos")
+        max_diff   = st.number_input("MAX_DIFF",   value=float(cv("MAX_DIFF",6)),   step=0.5, format="%.1f", help="Diferencia máxima entre anchos")
+    with col2:
+        max_widths = st.number_input("MAX_WIDTHS", value=int(cv("MAX_WIDTHS",3)),   min_value=1, step=1, help="Máximo de anchos distintos por lote")
+        max_sku    = st.number_input("MAX_SKU",    value=int(cv("MAX_SKU",8)),      min_value=1, step=1, help="Máximo de SKUs por lote")
+    with col3:
+        widths_target = st.text_input("WIDTHS_TARGET_ORDER", value=str(cv("WIDTHS_TARGET_ORDER","2>3>1")),
+                                      help="Orden de preferencia de número de anchos. Ej: 2>3>1")
+        req_strict    = st.checkbox("REQUIRE_WIDTHS_STRICT", value=bool(int(cv("REQUIRE_WIDTHS_STRICT",1))),
+                                    help="Obligar el orden de anchos estrictamente")
+    with col4:
+        st.markdown("**Resumen parámetros activos**")
+        st.caption(f"Anchos: {min_diff}–{max_diff} | Max anchos: {max_widths} | Max SKU: {max_sku}")
+        st.caption(f"Target order: {widths_target} | Strict: {req_strict}")
 
-    ra_edited = st.data_editor(
-        st.session_state.tbl_reglas_anchos,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_ra",
-        column_config={
-            "ANCHO_1":               st.column_config.NumberColumn("Ancho 1", format="%.1f"),
-            "ANCHO_2":               st.column_config.NumberColumn("Ancho 2", format="%.1f"),
-            "CAPACIDAD_PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
-            "CAPACIDAD_PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
-            "CAPACIDAD_PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
-        },
-    )
-    st.session_state.tbl_reglas_anchos = ra_edited
+    section3_overrides = {
+        "MIN_DIFF": min_diff, "MAX_DIFF": max_diff,
+        "MAX_WIDTHS": max_widths, "MAX_SKU": max_sku,
+        "WIDTHS_TARGET_ORDER": widths_target,
+        "REQUIRE_WIDTHS_STRICT": int(req_strict),
+    }
 
-    if ra_edited.empty:
-        st.info("ℹ️ Tabla vacía → combinaciones de anchos libres (sin restricción de pares).")
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECCIÓN 4 — Reglas de Combinación y Restricciones
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", expanded=False):
+    rt1, rt2, rt3, rt4, rt5 = st.tabs([
+        "🔗 Anchos Combinados",
+        "📐 Restricciones Ancho",
+        "🎨 Restricciones Color",
+        "👨‍👩‍👧 Restricciones Familia",
+        "⚖️ Combinaciones Prioridad",
+    ])
 
-# ── Tab: RESTRICCIONES_ANCHO ───────────────────────────────────────────────
-with tc3:
-    st.markdown("**Restricciones por STYLE y ancho límite** — si un lote contiene ese STYLE "
-                "y tiene un ancho ≤ LIMITE_ANCHO, prioriza las capacidades indicadas.")
+    with rt1:
+        st.markdown('<div class="info-note">Define qué pares de anchos pueden ir juntos y en qué tamaños (prioridades). '
+                    'Tabla vacía = combinaciones libres.</div>', unsafe_allow_html=True)
+        ra_ed = st.data_editor(
+            get_tbl("tbl_reglas_anchos", empty_ra), num_rows="dynamic",
+            use_container_width=True, key="editor_ra",
+            column_config={
+                "ANCHO_1":               st.column_config.NumberColumn("Ancho 1",       format="%.1f"),
+                "ANCHO_2":               st.column_config.NumberColumn("Ancho 2",       format="%.1f"),
+                "CAPACIDAD_PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
+                "CAPACIDAD_PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
+                "CAPACIDAD_PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
+            },
+        )
+        if st.button("💾 Guardar Anchos Combinados", key="save_ra"):
+            st.session_state.tbl_reglas_anchos = ra_ed
+            st.success("Guardado")
 
-    if st.session_state.tbl_restricciones_ancho is None:
-        st.session_state.tbl_restricciones_ancho = empty_restricciones_ancho()
+    with rt2:
+        st.markdown('<div class="info-note">Si un lote contiene ese STYLE y tiene un ancho ≤ LIMITE_ANCHO, '
+                    'prioriza las capacidades indicadas (de mayor a menor).</div>', unsafe_allow_html=True)
+        ras_ed = st.data_editor(
+            get_tbl("tbl_restricciones_ancho", empty_ras), num_rows="dynamic",
+            use_container_width=True, key="editor_ras",
+            column_config={
+                "STYLE":        st.column_config.TextColumn("STYLE", width="medium"),
+                "LIMITE_ANCHO": st.column_config.NumberColumn("Límite Ancho", format="%.1f"),
+                "PRIORIDAD_1":  st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
+                "PRIORIDAD_2":  st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
+                "PRIORIDAD_3":  st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
+            },
+        )
+        s_search = st.text_input("🔍 Buscar STYLE", key="style_search")
+        if s_search and not ras_ed.empty:
+            found = ras_ed[ras_ed["STYLE"].astype(str).str.upper().str.contains(s_search.upper(), na=False)]
+            if not found.empty: st.dataframe(found, use_container_width=True)
+            else: st.caption("Sin coincidencias")
+        if st.button("💾 Guardar Restricciones Ancho", key="save_ras"):
+            st.session_state.tbl_restricciones_ancho = ras_ed
+            st.success("Guardado")
 
-    ras_edited = st.data_editor(
-        st.session_state.tbl_restricciones_ancho,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_ras",
-        column_config={
-            "STYLE":        st.column_config.TextColumn("STYLE", width="medium"),
-            "LIMITE_ANCHO": st.column_config.NumberColumn("Límite Ancho", format="%.1f"),
-            "PRIORIDAD_1":  st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
-            "PRIORIDAD_2":  st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
-            "PRIORIDAD_3":  st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
-        },
-    )
-    st.session_state.tbl_restricciones_ancho = ras_edited
+    with rt3:
+        st.markdown('<div class="info-note">Según la columna COLOR_R en DATA, prioriza los tamaños de lote '
+                    'en el orden indicado.</div>', unsafe_allow_html=True)
+        rc_ed = st.data_editor(
+            get_tbl("tbl_restricciones_color", empty_rc), num_rows="dynamic",
+            use_container_width=True, key="editor_rc",
+            column_config={
+                "COLOR_R":     st.column_config.TextColumn("COLOR_R", width="medium"),
+                "PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
+                "PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
+                "PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
+            },
+        )
+        if st.button("💾 Guardar Restricciones Color", key="save_rc"):
+            st.session_state.tbl_restricciones_color = rc_ed
+            st.success("Guardado")
 
-    # Quick lookup
-    if not ras_edited.empty:
-        style_search = st.text_input("🔍 Buscar STYLE", key="style_search")
-        if style_search:
-            found = ras_edited[ras_edited["STYLE"].str.upper().str.contains(style_search.upper(), na=False)]
-            if not found.empty:
-                st.dataframe(found, use_container_width=True)
+    with rt4:
+        st.markdown('<div class="info-note">Familias listadas aquí respetan el orden de prioridades. '
+                    'Familias no listadas → loteo libre.</div>', unsafe_allow_html=True)
+        rf_ed = st.data_editor(
+            get_tbl("tbl_restricciones_familia", empty_rf), num_rows="dynamic",
+            use_container_width=True, key="editor_rf",
+            column_config={
+                "FAMILIA":     st.column_config.TextColumn("FAMILIA", width="medium"),
+                "PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
+                "PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
+                "PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
+                "PRIORIDAD_4": st.column_config.NumberColumn("Prioridad 4 (LBS)", format="%d"),
+            },
+        )
+        if st.button("💾 Guardar Restricciones Familia", key="save_rf"):
+            st.session_state.tbl_restricciones_familia = rf_ed
+            st.success("Guardado")
+
+    with rt5:
+        st.markdown('<div class="info-note">Por defecto los bloques de prioridad NO se mezclan. '
+                    'Agrega aquí los pares que SÍ pueden coexistir en un mismo lote. '
+                    'Tabla vacía = sin mezcla.</div>', unsafe_allow_html=True)
+        BLOQUES = ["VENCIDOS","AHEAD","AHEAD2","OTROS"]
+        comb_ed = st.data_editor(
+            get_tbl("tbl_combinaciones", empty_comb), num_rows="dynamic",
+            use_container_width=True, key="editor_comb",
+            column_config={
+                "PRIORIDAD_1": st.column_config.SelectboxColumn("Bloque 1", options=BLOQUES),
+                "PRIORIDAD_2": st.column_config.SelectboxColumn("Bloque 2", options=BLOQUES),
+            },
+        )
+        if st.button("💾 Guardar Combinaciones Prioridad", key="save_comb"):
+            st.session_state.tbl_combinaciones = comb_ed
+            st.success("Guardado")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECCIÓN 5 — Guardar Perfil
+# ══════════════════════════════════════════════════════════════════════════════
+with st.expander("💾  Sección 5 — Guardar Perfil de Configuración", expanded=False):
+    all_overrides = {**adv_overrides, **section3_overrides}
+    pc1, pc2, pc3 = st.columns([2,1,1])
+    with pc1:
+        pname_input = st.text_input("Nombre del perfil", placeholder="ej. Semana23_DYE", key="pname_input")
+    with pc2:
+        if st.button("💾 Guardar en sesión", use_container_width=True):
+            nm = pname_input.strip()
+            if nm:
+                profiles[nm] = build_profile(all_overrides)
+                st.session_state.profiles = profiles
+                st.success(f"'{nm}' guardado")
             else:
-                st.caption("Sin coincidencias.")
+                st.warning("Ingresa un nombre")
+    with pc3:
+        profile_json = json.dumps(build_profile(all_overrides), indent=2, ensure_ascii=False)
+        fn = (pname_input.strip() or "perfil") + ".json"
+        st.download_button("📤 Exportar JSON", data=profile_json,
+                           file_name=fn, mime="application/json", use_container_width=True)
 
-# ── Tab: RESTRICCIONES_COLOR ───────────────────────────────────────────────
-with tc4:
-    st.markdown("**Restricciones por COLOR_R** — según la categoría de color en DATA, "
-                "prioriza los tamaños de lote en el orden indicado.")
+    if profiles:
+        st.caption(f"Perfiles en sesión: {', '.join(profiles.keys())}")
 
-    if st.session_state.tbl_restricciones_color is None:
-        st.session_state.tbl_restricciones_color = empty_restricciones_color()
-
-    rc_edited = st.data_editor(
-        st.session_state.tbl_restricciones_color,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_rc",
-        column_config={
-            "COLOR_R":     st.column_config.TextColumn("COLOR_R", width="medium"),
-            "PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
-            "PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
-            "PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
-        },
-    )
-    st.session_state.tbl_restricciones_color = rc_edited
-
-# ── Tab: RESTRICCIONES_FAMILIA ─────────────────────────────────────────────
-with tc5:
-    st.markdown("**Restricciones por FAMILIA** — si la familia del SKU aparece en esta tabla, "
-                "se respeta el orden de prioridades. Si no está, el loteo es libre.")
-
-    if st.session_state.tbl_restricciones_familia is None:
-        st.session_state.tbl_restricciones_familia = empty_restricciones_familia()
-
-    rf_edited = st.data_editor(
-        st.session_state.tbl_restricciones_familia,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_rf",
-        column_config={
-            "FAMILIA":     st.column_config.TextColumn("FAMILIA", width="medium"),
-            "PRIORIDAD_1": st.column_config.NumberColumn("Prioridad 1 (LBS)", format="%d"),
-            "PRIORIDAD_2": st.column_config.NumberColumn("Prioridad 2 (LBS)", format="%d"),
-            "PRIORIDAD_3": st.column_config.NumberColumn("Prioridad 3 (LBS)", format="%d"),
-            "PRIORIDAD_4": st.column_config.NumberColumn("Prioridad 4 (LBS)", format="%d"),
-        },
-    )
-    st.session_state.tbl_restricciones_familia = rf_edited
-
-# ── Tab: COMBINACIONES_PRIORIDAD ───────────────────────────────────────────
-with tc6:
-    st.markdown("**Mezcla de bloques de prioridad** — por defecto NO se mezclan prioridades distintas. "
-                "Agrega aquí los pares que SÍ pueden coexistir en un mismo lote.")
-
-    if st.session_state.tbl_combinaciones is None:
-        st.session_state.tbl_combinaciones = empty_combinaciones()
-
-    BLOQUES = ["VENCIDOS","AHEAD","AHEAD2","OTROS"]
-    comb_edited = st.data_editor(
-        st.session_state.tbl_combinaciones,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="editor_comb",
-        column_config={
-            "PRIORIDAD_1": st.column_config.SelectboxColumn("Bloque 1", options=BLOQUES),
-            "PRIORIDAD_2": st.column_config.SelectboxColumn("Bloque 2", options=BLOQUES),
-        },
-    )
-    st.session_state.tbl_combinaciones = comb_edited
-
-    if comb_edited.empty:
-        st.warning("⚠️ Tabla vacía → bloques de prioridad NO se mezclan (cada lote solo tiene un bloque).")
-
+# ══════════════════════════════════════════════════════════════════════════════
+#  BOTÓN PRINCIPAL — Correr Loteo
+# ══════════════════════════════════════════════════════════════════════════════
 st.divider()
+can_run = (
+    st.session_state.df_data is not None and
+    st.session_state.raw_file_bytes is not None and
+    st.session_state.cap_applied
+)
 
+if not can_run:
+    reasons = []
+    if st.session_state.df_data is None:     reasons.append("📁 Sube un archivo Excel")
+    if not st.session_state.cap_applied:     reasons.append("📋 Aplica cambios de capacidad en Sección 2")
+    st.info("  ·  ".join(reasons) if reasons else "Listo para correr")
+
+run_btn = st.button(
+    "▶  Correr Loteo",
+    type="primary",
+    use_container_width=True,
+    disabled=not can_run,
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CORRER LOTEO
+#  EJECUCIÓN
 # ══════════════════════════════════════════════════════════════════════════════
-if run_btn:
-    with st.spinner("Aplicando configuración…"):
+if run_btn and can_run:
+    all_overrides = {**adv_overrides, **section3_overrides}
+    with st.spinner("Preparando parámetros…"):
         try:
-            buf = io.BytesIO(st.session_state.raw_file_bytes)
-            df_data2, df_cap2, params2, _ = load_inputs(buf, param_overrides=overrides)
-
-            # Override tables with UI-edited versions
-            cap_ui = st.session_state.tbl_capacidades
-            if cap_ui is not None and not cap_ui.empty:
+            df_data2, df_cap2, params2, _ = load_inputs(
+                io.BytesIO(st.session_state.raw_file_bytes),
+                param_overrides=all_overrides,
+            )
+            # Override capacidades con tabla editada en UI
+            cap_ui = get_tbl("tbl_capacidades", empty_cap)
+            if not cap_ui.empty:
                 for c in ["MINIMO","MAXIMO","CAPACIDAD"]:
                     cap_ui[c] = pd.to_numeric(cap_ui[c], errors="coerce")
                 df_cap2 = cap_ui.dropna(subset=["MINIMO","MAXIMO","CAPACIDAD"]).copy()
-
-            # Rebuild MIX_ALLOWED from UI table
-            comb_ui = st.session_state.tbl_combinaciones
-            if comb_ui is not None and not comb_ui.empty:
-                allowed_pairs = set()
-                for _, r in comb_ui.iterrows():
-                    a = str(r.get("PRIORIDAD_1","")).strip()
-                    b = str(r.get("PRIORIDAD_2","")).strip()
-                    if a and b:
-                        allowed_pairs.add((a,b)); allowed_pairs.add((b,a))
-                params2["MIX_ALLOWED"] = allowed_pairs
-
-            # Rebuild RESTRICCIONES from UI tables
-            def rebuild_restricciones_familia(df_rf):
-                out = {}
-                if df_rf is None or df_rf.empty: return out
-                pcols = [c for c in df_rf.columns if c.upper().startswith("PRIORIDAD")]
-                for _, r in df_rf.iterrows():
-                    f = str(r.get("FAMILIA","")).strip().upper()
-                    if not f: continue
-                    caps = [float(r[pc]) for pc in pcols if pd.notna(r.get(pc))]
-                    if caps: out[f] = caps
-                return out
-
-            def rebuild_restricciones_color(df_rc):
-                out = {}
-                if df_rc is None or df_rc.empty: return out
-                for _, r in df_rc.iterrows():
-                    c = str(r.get("COLOR_R","")).strip().upper()
-                    v = r.get("PRIORIDAD_1", None)
-                    out[c] = float(v) if pd.notna(v) else None
-                return out
-
-            def rebuild_restricciones_ancho(df_ras):
-                out = {}
-                if df_ras is None or df_ras.empty: return out
-                pcols = [c for c in df_ras.columns if c.upper().startswith("PRIORIDAD")]
-                for _, r in df_ras.iterrows():
-                    style = str(r.get("STYLE","")).strip().upper()
-                    if not style: continue
-                    lim = r.get("LIMITE_ANCHO", None)
-                    try: lim = float(lim) if pd.notna(lim) else None
-                    except: lim = None
-                    caps = []
-                    for pc in pcols:
-                        v = r.get(pc, None)
-                        if pd.notna(v):
-                            try: caps.append(float(v))
-                            except: pass
-                    out[style] = {"limite": lim, "prioridades": caps}
-                return out
-
-            def rebuild_reglas_anchos(df_ra):
-                out = []
-                if df_ra is None or df_ra.empty: return out
-                pcols = [c for c in df_ra.columns if c.upper().startswith("CAPACIDAD_PRIORIDAD")]
-                for _, r in df_ra.iterrows():
-                    try:
-                        a1 = float(r.get("ANCHO_1",0)); a2 = float(r.get("ANCHO_2",0))
-                    except: continue
-                    caps = [float(r[pc]) for pc in pcols if pd.notna(r.get(pc))]
-                    if caps: out.append({"a1": a1, "a2": a2, "prioridades": caps})
-                return out
-
-            params2["RESTRICCIONES_FAMILIA"]    = rebuild_restricciones_familia(st.session_state.tbl_restricciones_familia)
-            params2["RESTRICCIONES_COLOR"]       = rebuild_restricciones_color(st.session_state.tbl_restricciones_color)
-            params2["RESTRICCIONES_ANCHO"]       = rebuild_restricciones_ancho(st.session_state.tbl_restricciones_ancho)
-            params2["REGLAS_ANCHOS_COMBINADOS"]  = rebuild_reglas_anchos(st.session_state.tbl_reglas_anchos)
-
+            params2 = rebuild_all_params(params2)
         except Exception as e:
-            st.error(f"Error al preparar parámetros: {e}")
+            st.error(f"Error al preparar: {e}")
             st.stop()
 
-    progress_bar = st.progress(0, text="Iniciando loteo…")
-
-    def progress_cb(pct, msg):
-        progress_bar.progress(min(pct, 0.99), text=msg)
+    prog = st.progress(0, text="Iniciando loteo…")
+    def cb(pct, msg): prog.progress(min(pct, 0.99), text=msg)
 
     try:
-        df_det, df_res, df_exc, df_par = run_loteo(df_data2, df_cap2, params2, progress_callback=progress_cb)
+        df_det, df_res, df_exc, df_par = run_loteo(df_data2, df_cap2, params2, progress_callback=cb)
         reports = build_reports(df_data2, df_cap2, df_det, df_res)
-        progress_bar.progress(1.0, text="¡Loteo completado!")
+        prog.progress(1.0, text="¡Loteo completado!")
     except Exception as e:
-        st.error(f"Error en el loteo: {e}")
+        st.error(f"Error en loteo: {e}")
         st.stop()
 
     result = {
@@ -629,17 +636,15 @@ if run_btn:
     }
     st.session_state.last_result = result
     hist = st.session_state.run_history
-    hist.append(result)
+    hist.append(result); 
     if len(hist) > 5: hist.pop(0)
     st.session_state.run_history = hist
     st.rerun()
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  RESULTADOS
 # ══════════════════════════════════════════════════════════════════════════════
 if st.session_state.last_result is None:
-    st.caption("Sube un archivo y presiona **▶ Correr Loteo** para ver resultados.")
     st.stop()
 
 res     = st.session_state.last_result
@@ -647,12 +652,16 @@ df_det  = res["detalle"]
 df_res  = res["resumen"]
 df_exc  = res["excedentes"]
 reports = res["reports"]
+lnk_df  = reports.get("LNK_COMPLETITUD", pd.DataFrame())
 
 # KPIs
+st.divider()
+st.markdown("### 📊 Resultados de la Corrida")
+st.caption(f"Corrida: {res['ts']}")
+
 total_lotes    = len(df_res)
 total_lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
 total_lbs_exc  = df_exc["LBS_RESTANTES"].sum() if not df_exc.empty else 0
-lnk_df         = reports.get("LNK_COMPLETITUD", pd.DataFrame())
 completitud_pct= (lnk_df["ESTADO"].isin(["COMPLETO","COMPLETO (SCRAP)"]).sum()/len(lnk_df)*100) if not lnk_df.empty else 0
 cap_perdida    = df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0
 
@@ -662,10 +671,8 @@ k2.metric("LBS asignadas",    fmt_lbs(total_lbs_asig))
 k3.metric("LBS excedentes",   fmt_lbs(total_lbs_exc))
 k4.metric("LNKs completos",   f"{completitud_pct:.1f}%")
 k5.metric("Capacidad perdida",fmt_lbs(cap_perdida))
-st.caption(f"Corrida: {res['ts']}")
-st.divider()
 
-# Tabs resultados
+# Tabs de resultados
 tab_g, tab_d, tab_r, tab_l, tab_c, tab_e = st.tabs([
     "📊 Gráficas", "📋 Detalle Lotes", "📄 Resumen",
     "🔍 Decision Log", "🔁 Comparar Corridas", "⚠️ Excedentes",
@@ -689,16 +696,15 @@ with tab_d:
         det_mix    = dc1.multiselect("MIX",    sorted(df_det["MIX"].unique()), key="det_mix")
         det_regla  = dc2.multiselect("Regla",  sorted(df_det["APLICA_REGLA"].unique()), key="det_regla")
         det_bloque = dc3.multiselect("Bloque", sorted(df_det["BLOQUE"].unique()), key="det_bloque")
-        filtered = df_det.copy()
-        if det_mix:    filtered = filtered[filtered["MIX"].isin(det_mix)]
-        if det_regla:  filtered = filtered[filtered["APLICA_REGLA"].isin(det_regla)]
-        if det_bloque: filtered = filtered[filtered["BLOQUE"].isin(det_bloque)]
-        st.dataframe(filtered, use_container_width=True, height=420)
-        st.caption(f"{len(filtered):,} filas")
+        filt = df_det.copy()
+        if det_mix:    filt = filt[filt["MIX"].isin(det_mix)]
+        if det_regla:  filt = filt[filt["APLICA_REGLA"].isin(det_regla)]
+        if det_bloque: filt = filt[filt["BLOQUE"].isin(det_bloque)]
+        st.dataframe(filt, use_container_width=True, height=420)
+        st.caption(f"{len(filt):,} filas")
 
 with tab_r:
-    if df_res.empty:
-        st.info("Sin resumen.")
+    if df_res.empty: st.info("Sin resumen.")
     else:
         st.dataframe(df_res, use_container_width=True, height=420)
         st.subheader("Capacidad por Categoría")
@@ -706,8 +712,7 @@ with tab_r:
 
 with tab_l:
     dlog = reports.get("DECISION_LOG", pd.DataFrame())
-    if dlog.empty:
-        st.info("Sin log.")
+    if dlog.empty: st.info("Sin log.")
     else:
         lc1,lc2,lc3 = st.columns(3)
         log_lnk    = lc1.text_input("LNK contiene", key="log_lnk")
@@ -722,12 +727,11 @@ with tab_l:
 
 with tab_c:
     hist = st.session_state.run_history
-    if len(hist) < 2:
-        st.info("Corre al menos **2 corridas** para comparar.")
+    if len(hist) < 2: st.info("Corre al menos 2 corridas para comparar.")
     else:
         rows = []
         for i, r in enumerate(hist):
-            d   = r["detalle"];  s = r["resumen"];  exc = r["excedentes"]
+            d = r["detalle"]; s = r["resumen"]; exc = r["excedentes"]
             lnk_c = r["reports"].get("LNK_COMPLETITUD", pd.DataFrame())
             rows.append({
                 "Corrida": f"#{i+1} – {r['label']}",
@@ -740,26 +744,23 @@ with tab_c:
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
         st.subheader("Descargar corridas")
         for i, r in enumerate(hist):
-            xlsx = export_excel(r)
-            fn   = f"RESULTADOS_LOTES_{r['ts'].replace(':','').replace(' ','_').replace('-','')}.xlsx"
-            st.download_button(f"⬇ Corrida #{i+1} – {r['label']}", data=xlsx,
+            fn = f"RESULTADOS_LOTES_{r['ts'].replace(':','').replace(' ','_').replace('-','')}.xlsx"
+            st.download_button(f"⬇ Corrida #{i+1} – {r['label']}", data=export_excel(r),
                                file_name=fn, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                key=f"dl_hist_{i}")
 
 with tab_e:
-    if df_exc.empty:
-        st.success("✅ Sin excedentes.")
+    if df_exc.empty: st.success("✅ Sin excedentes.")
     else:
         st.warning(f"⚠️ {len(df_exc):,} filas sin asignar.")
         st.dataframe(df_exc, use_container_width=True, height=420)
 
-# Global download
+# Descarga global
 st.divider()
-xlsx_bytes = export_excel(res)
-ts_clean   = res["ts"].replace(":","").replace(" ","_").replace("-","")
+ts_clean = res["ts"].replace(":","").replace(" ","_").replace("-","")
 st.download_button(
-    "⬇ Descargar Excel completo (última corrida)",
-    data=xlsx_bytes,
+    "⬇  Descargar Excel completo (última corrida)",
+    data=export_excel(res),
     file_name=f"RESULTADOS_LOTES_{ts_clean}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
