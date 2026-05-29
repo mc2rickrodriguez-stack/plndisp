@@ -418,8 +418,11 @@ with st.expander("🎯  Sección 3 — Calidad del Loteo", expanded=True):
         quality_level=st.slider(
             "Calidad del loteo",min_value=1,max_value=10,
             value=int(cv("QUALITY_LEVEL",5)),
+            key="quality_slider",
             help="1 = Muy rápido (menos exhaustivo) · 10 = Óptimo (más lento)",
         )
+        # Always persist to session_state so it's available even when collapsed
+        st.session_state["_quality_level"]=quality_level
         beam=quality_to_beam(quality_level)
         st.caption(f"BEAM_WIDTH interno: **{beam}** · "
                    f"{'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Lento/Óptimo'}")
@@ -431,7 +434,9 @@ with st.expander("🎯  Sección 3 — Calidad del Loteo", expanded=True):
             st.metric("Grupos estimados",f"{groups_est:,}")
             st.caption(f"⏱ Tiempo estimado: ~{est_sec/60:.1f} min")
 
-    section3_overrides={"QUALITY_LEVEL":quality_level}
+# Read quality from session_state (safe even if expander was collapsed)
+_ql=st.session_state.get("_quality_level", int((st.session_state.cfg or {}).get("QUALITY_LEVEL",5)))
+section3_overrides={"QUALITY_LEVEL":_ql}
 
 # ── Sección 4: Reglas ──────────────────────────────────────────────────────
 with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", expanded=False):
@@ -543,6 +548,10 @@ if not can_run:
     if not st.session_state.cap_applied:   tips.append("📋 Aplica cambios de capacidad (Sección 2)")
     st.info("  ·  ".join(tips))
 
+run_comment=st.text_input("💬 Comentario para esta corrida (opcional)",
+                           placeholder="ej. Prueba calidad 10 con nuevas capacidades",
+                           key="run_comment")
+
 btn_col,cancel_col=st.columns([3,1])
 with btn_col:
     run_btn=st.button("▶  Correr Loteo",type="primary",use_container_width=True,disabled=not can_run)
@@ -594,6 +603,8 @@ if run_btn and can_run:
 
     result={"ts":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "label":datetime.now().strftime("%H:%M:%S"),
+            "comentario":st.session_state.get("run_comment",""),
+            "quality_used":_ql,
             "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
             "params_out":df_par,
             "reports":build_reports(df_data2,df_cap2,df_det,df_res),
@@ -618,7 +629,9 @@ if res.get("cancelled"):
 
 st.divider()
 st.markdown("### 📊 Resultados")
-st.caption(f"Corrida: {res['ts']}")
+_comment=res.get("comentario","")
+_ql_used=res.get("quality_used","?")
+st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  {'·  💬 '+_comment if _comment else ''}")
 
 k1,k2,k3,k4,k5=st.columns(5)
 k1.metric("Lotes",f"{len(df_res):,}")
@@ -633,14 +646,74 @@ tab_g,tab_d,tab_r,tab_l,tab_c,tab_e=st.tabs([
     "🔍 Decision Log","🔁 Comparar Corridas","⚠️ Excedentes"])
 
 with tab_g:
-    cap_df=reports.get("CAPACIDAD_X_CATEG",pd.DataFrame())
-    prio_df=reports.get("PRIORIDAD_VS_ASIG",pd.DataFrame())
+    cap_df  = reports.get("CAPACIDAD_X_CATEG", pd.DataFrame())
+    prio_df = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
     c1,c2=st.columns(2)
-    with c1: st.plotly_chart(chart_capacidad_barras(cap_df),use_container_width=True)
-    with c2: st.plotly_chart(chart_bloques_donut(prio_df),use_container_width=True)
+    with c1: st.plotly_chart(chart_capacidad_barras(cap_df), use_container_width=True)
+    with c2: st.plotly_chart(chart_bloques_donut(prio_df),   use_container_width=True)
     c3,c4=st.columns(2)
-    with c3: st.plotly_chart(chart_heatmap_capacidad(cap_df),use_container_width=True)
-    with c4: st.plotly_chart(chart_completitud_lnk(lnk_df),use_container_width=True)
+    with c3: st.plotly_chart(chart_heatmap_capacidad(cap_df),  use_container_width=True)
+    with c4: st.plotly_chart(chart_completitud_lnk(lnk_df),    use_container_width=True)
+
+    st.divider()
+    st.markdown("#### 📋 Tablas Resumen")
+    ta,tb,tc,td = st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría"])
+
+    with ta:
+        if df_det.empty or prio_df.empty:
+            st.info("Sin datos.")
+        else:
+            t1 = prio_df.copy()
+            lotes_bloque = df_res.groupby("BLOQUE_DOMINANTE")["LOTE_ID"].count().reset_index() if not df_res.empty else pd.DataFrame(columns=["BLOQUE_DOMINANTE","LOTE_ID"])
+            lotes_bloque.columns = ["BLOQUE","LOTES"]
+            t1 = t1.merge(lotes_bloque, left_on="BLOQUE", right_on="BLOQUE", how="left").fillna({"LOTES":0})
+            t1["LOTES"] = t1["LOTES"].astype(int)
+            t1["% ASIGNADO"] = (t1["LBS_ASIGNADAS"] / t1["LBS_BASE"].replace(0,pd.NA) * 100).fillna(0).round(1)
+            t1 = t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas",
+                                     "LBS_ASIGNADAS":"LBS Asignadas","LBS_SIN_ASIGNAR":"LBS Sin Asignar"})
+            cols = [c for c in ["Prioridad","MIX","LBS Planeadas","LBS Asignadas","LBS Sin Asignar","LOTES","% ASIGNADO"] if c in t1.columns]
+            st.dataframe(t1[cols], use_container_width=True, hide_index=True)
+
+    with tb:
+        if df_res.empty:
+            st.info("Sin datos.")
+        else:
+            t2 = df_res.groupby("ANCHOS_UNICOS").agg(
+                LBS_Asignadas=("LBS_TOTAL","sum"), Lotes=("LOTE_ID","count")
+            ).reset_index().sort_values("ANCHOS_UNICOS")
+            t2.columns = ["N° Anchos","LBS Asignadas","Lotes"]
+            total = t2["LBS Asignadas"].sum()
+            t2["% del Total"] = (t2["LBS Asignadas"] / total * 100).round(1) if total>0 else 0
+            st.dataframe(t2, use_container_width=True, hide_index=True)
+
+    with tc:
+        if df_res.empty:
+            st.info("Sin datos.")
+        else:
+            t3 = df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"]).agg(
+                LBS_Asignadas=("LBS_TOTAL","sum"),
+                Lotes=("LOTE_ID","count"),
+                Min_LBS_Lote=("LBS_TOTAL","min"),
+                Max_LBS_Lote=("LBS_TOTAL","max"),
+            ).reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"])
+            t3.columns = ["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
+            st.dataframe(t3, use_container_width=True, hide_index=True)
+
+    with td:
+        if cap_df.empty:
+            st.info("Sin datos.")
+        else:
+            t4 = cap_df.copy()
+            if not df_res.empty:
+                lotes_cat = df_res.groupby("CATEGORIA")["LOTE_ID"].count().reset_index()
+                lotes_cat.columns = ["CATEGORIA","LOTES"]
+                t4 = t4.merge(lotes_cat, on="CATEGORIA", how="left").fillna({"LOTES":0})
+                t4["LOTES"] = t4["LOTES"].astype(int)
+            disp = {"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX",
+                    "LBS_ASIGNADAS":"LBS Asignadas","LOTES":"Lotes",
+                    "CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
+            t4 = t4.rename(columns=disp)
+            st.dataframe(t4[[v for v in disp.values() if v in t4.columns]], use_container_width=True, hide_index=True)
 
 with tab_d:
     if df_det.empty: st.info("Sin lotes.")
@@ -677,7 +750,6 @@ with tab_l:
         if lr: lf=lf[lf["APLICA_REGLA"].isin(lr)]
         if lb: lf=lf[lf["BLOQUE"].isin(lb)]
         st.dataframe(lf,use_container_width=True,height=440)
-        # Leyenda de códigos
         with st.expander("📖 Leyenda de códigos de descarte"):
             for code,desc in DESCARTE_MSGS.items():
                 st.caption(f"**{code}** — {desc}")
@@ -691,23 +763,26 @@ with tab_c:
         for i,r in enumerate(hist):
             d=r["detalle"]; s=r["resumen"]; exc=r["excedentes"]
             lc=r["reports"].get("LNK_COMPLETITUD",pd.DataFrame())
-            ql=s["QUALITY_LEVEL"].iloc[0] if "QUALITY_LEVEL" in s.columns and not s.empty else "-"
             rows.append({
-                "Corrida":f"#{i+1} – {r['label']}",
-                "Calidad":ql,"Lotes":len(s),
+                "#":i+1, "Hora":r["label"],
+                "Calidad":r.get("quality_used","?"),
+                "Comentario":r.get("comentario","—"),
+                "Lotes":len(s),
                 "LBS Asignadas":fmt(d["LBS_ASIGNADAS"].sum() if not d.empty else 0),
                 "LBS Excedentes":fmt(exc["LBS_RESTANTES"].sum() if not exc.empty else 0),
                 "Cap. Perdida":fmt(s["CAPACIDAD_PERDIDA"].sum() if not s.empty else 0),
-                "LNKs Completos %":f"{(lc['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lc)*100) if not lc.empty else 0:.1f}%",
-                "¿Cancelada?":"Sí" if r.get("cancelled") else "No",
+                "LNKs %":f"{(lc['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lc)*100) if not lc.empty else 0:.1f}%",
+                "Cancelada":"Sí" if r.get("cancelled") else "No",
             })
-        st.dataframe(pd.DataFrame(rows),use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.subheader("Descargar corridas")
         for i,r in enumerate(hist):
+            lbl=f"⬇ #{i+1} {r['label']}" + (f" — {r['comentario']}" if r.get("comentario") else "")
             fn=f"RESULTADOS_LOTES_{r['ts'].replace(':','').replace(' ','_').replace('-','')}.xlsx"
-            st.download_button(f"⬇ Corrida #{i+1} – {r['label']}",data=export_excel(r),
-                               file_name=fn,mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            st.download_button(lbl, data=export_excel(r), file_name=fn,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                key=f"dl_{i}")
+
 
 with tab_e:
     if df_exc.empty: st.success("✅ Sin excedentes.")
