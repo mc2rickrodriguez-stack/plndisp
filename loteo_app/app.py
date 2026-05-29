@@ -44,7 +44,25 @@ CAP_COLS=["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX",
           "SCRAP_REMAINDER","APPLY_RULES_BLEACH","SPLIT_MIN_LBS",
           "OVERSHOOT_TOL_PCT","UNDERSHOOT_TOL_PCT"]
 
-def empty_cap():  return pd.DataFrame(columns=CAP_COLS)
+BOOL_CAP_COLS=["OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR",
+               "SCRAP_REMAINDER","APPLY_RULES_BLEACH"]
+
+def _fix_bool_cols(df):
+    """Ensure bool columns are Python bool (not int/str) for CheckboxColumn."""
+    def to_bool(v):
+        if pd.isna(v): return False
+        if isinstance(v,bool): return v
+        return str(v).strip().upper() in ("1","TRUE","YES","SI","SÍ","X")
+    for col in BOOL_CAP_COLS:
+        if col in df.columns:
+            df[col]=df[col].apply(to_bool)
+    return df
+
+def empty_cap():
+    df=pd.DataFrame(columns=CAP_COLS)
+    for col in BOOL_CAP_COLS:
+        df[col]=pd.Series(dtype=bool)
+    return df
 def empty_ra():   return pd.DataFrame(columns=["ANCHO_1","ANCHO_2","CAPACIDAD_PRIORIDAD_1","CAPACIDAD_PRIORIDAD_2","CAPACIDAD_PRIORIDAD_3"])
 def empty_ras():  return pd.DataFrame(columns=["STYLE","LIMITE_ANCHO","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
 def empty_rc():   return pd.DataFrame(columns=["COLOR_R","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
@@ -53,11 +71,16 @@ def empty_comb(): return pd.DataFrame(columns=["PRIORIDAD_1","PRIORIDAD_2"])
 
 def get_tbl(key,factory):
     t=st.session_state[key]
-    return t if t is not None else factory()
+    df= t if t is not None else factory()
+    if factory==empty_cap and not df.empty: df=_fix_bool_cols(df)
+    return df
 
 # ── Profile helpers ────────────────────────────────────────────────────────
 def df2j(df): return [] if (df is None or df.empty) else df.where(pd.notna(df),None).to_dict("records")
-def j2df(r,f): return pd.DataFrame(r) if r else f()
+def j2df(r,f):
+    df= pd.DataFrame(r) if r else f()
+    if f==empty_cap: df=_fix_bool_cols(df)
+    return df
 
 def build_profile(overrides):
     p={"overrides":overrides,"created":datetime.now().isoformat(),"notes":"",
@@ -96,10 +119,20 @@ def apply_profile(profile):
 
 def load_tables_from_excel(raw):
     xls=pd.ExcelFile(io.BytesIO(raw),engine="openpyxl")
+    BOOL_COLS=["OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR",
+               "SCRAP_REMAINDER","APPLY_RULES_BLEACH"]
+    def to_bool(v):
+        if pd.isna(v): return False
+        if isinstance(v,bool): return v
+        return str(v).strip().upper() in ("1","TRUE","YES","SI","SÍ","X")
     def sr(sheet,factory):
         if sheet in xls.sheet_names:
             df=pd.read_excel(io.BytesIO(raw),sheet_name=sheet,engine="openpyxl")
             df.columns=[str(c).strip() for c in df.columns]
+            # Convert bool columns to real bool so CheckboxColumn renders correctly
+            for col in BOOL_COLS:
+                if col in df.columns:
+                    df[col]=df[col].apply(to_bool)
             return df
         return factory()
     st.session_state.tbl_capacidades          =sr("CAPACIDADES_TINTO",       empty_cap)

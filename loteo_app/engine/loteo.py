@@ -77,6 +77,8 @@ def reorder_ranges_for_seed(ranges_mix, mixv, work, seed_idx, params, width_cach
     reglas_combo= params.get("REGLAS_ANCHOS_COMBINADOS",[])
     rule_order  = [x.strip().upper() for x in norm_str(params.get("RULE_ORDER","")).split(">") if x.strip()] or \
                   ["RESTRICCION_ANCHO","COMBO_ANCHOS","COLOR_R","FAMILIA","DEFAULT"]
+    # FIX: ANCHO18 es alias de RESTRICCION_ANCHO (compatibilidad con configs anteriores)
+    rule_order  = ["RESTRICCION_ANCHO" if t=="ANCHO18" else t for t in rule_order]
 
     def ancho_leq(lim):
         vals=[v for v in [ancho_c,ancho_m] if v>0]
@@ -153,6 +155,7 @@ DESCARTE_MSGS = {
     "SPLIT_MIN":          "Residuo menor al mínimo de split permitido",
     "MAX_WIDTHS":         "Se superaría el máximo de anchos distintos",
     "RANGO_SUPERIOR":     "Rango superior no permitido o salto excesivo",
+    "RESCUE":             "Lote de rescate — LNK no pudo entrar en loteo normal",
 }
 
 def score_lote(lote_dict, widths_set, params, rango):
@@ -225,13 +228,18 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
         return True,""
 
     seed_rest = float(work.at[seed_idx,"LBS_RESTANTES"])
+    seed_total_orig = float(work.at[seed_idx,"TOTAL"]) if "TOTAL" in work.columns else seed_rest
+    # FIX: if this is the last remaining portion (≤ original order), ignore SPLIT_MIN
+    # SPLIT_MIN exists to avoid tiny future residues, not to block the final piece
+    is_last_portion = (seed_rest <= seed_total_orig + 1e-6)
+    effective_split = 0.0 if is_last_portion else split_min
     remaining = max_allowed
     use_human = int(rango_param(rango,"OVERSHOOT",params,0))==1
 
     if use_human:
         take,oe,us = choose_take_humano(seed_rest,remaining,work.loc[seed_idx],params,"")
     else:
-        take = choose_take(seed_rest,remaining,split_min,allow_scrap_residue=allow_scrap)
+        take = choose_take(seed_rest,remaining,effective_split,allow_scrap_residue=allow_scrap)
         oe=us=0.0
 
     ok,reason = can_add(seed_idx,take)
@@ -259,7 +267,10 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
             if idx in lote_set: continue
             rest=float(work.at[idx,"LBS_RESTANTES"])
             if rest<=0: continue
-            tk=choose_take(rest,remaining,split_min,allow_scrap_residue=allow_scrap)
+            # FIX: last portion ignores SPLIT_MIN
+            orig=float(work.at[idx,"TOTAL"]) if "TOTAL" in work.columns else rest
+            eff_split=0.0 if rest<=orig+1e-6 else split_min
+            tk=choose_take(rest,remaining,eff_split,allow_scrap_residue=allow_scrap)
             if tk<=0: continue
             ok,_=can_add(idx,tk)
             if not ok: continue
@@ -512,6 +523,70 @@ def run_loteo(df_data, df_cap, params,
                 blocked=set(); made_any=True; break
 
             if not made_any: break
+
+        # ── FIX 3: Rescue pass — mono-SKU lots for stranded LNKs ────────────
+        # After main loop, any row still with LBS_RESTANTES > 0 tries a
+        # single-SKU lote in ANY available range, ignoring SPLIT_MIN entirely.
+        work["LBS_RESTANTES"]=pd.to_numeric(work["LBS_RESTANTES"],errors="coerce").fillna(0.0)
+        stranded=work[work["LBS_RESTANTES"]>1e-9].sort_values("LBS_RESTANTES",ascending=False)
+        for seed_idx in stranded.index:
+            if cancel_flag and cancel_flag[0]: break
+            if float(work.at[seed_idx,"LBS_RESTANTES"])<=1e-9: continue
+            for r in sorted(ranges_mix, key=lambda x: -float(x["MAXIMO"])):
+                if capacity_used[r["RANGO_ID"]]>=r["CAPACIDAD"]-1e-6: continue
+                intento,_=intentar_lote_para_rango(
+                    work,seed_idx,r,capacity_used,params,
+                    {"regla_aplicada":"NONE","prioridades":[],"match_combo":False,
+                     "limite_ancho_style":None,"origen_prioridad":"RESCUE","combo_target_width":None},
+                    width_cache, require_two_widths=False, split_min_lbs=0.0)
+                if intento is not None:
+                    lote_id=f"L{lote_id_global:06d}"; lote_id_global+=1
+                    anchos_lote=intento["FINAL_WIDTHS"]; anchos_lote_str=str(anchos_lote)
+                    for idx,lbs_asig,oe,us in intento["ROWS"]:
+                        detalle.append({
+                            "LOTE_ID":lote_id,"ANCHOS_LOTE":anchos_lote_str,
+                            "CATEGORIA":intento["CATEGORIA"],"MIX":intento["MIX"],
+                            "TELA.CUERPO":tela,"COLOR":work.at[idx,"COLOR"],
+                            "TONO":work.at[idx,"TONO"] if "TONO" in work.columns else "",
+                            "LNK":work.at[idx,"LNK"],"PRIORIDAD":work.at[idx,"PRIORIDAD"],
+                            "BLOQUE":work.at[idx,"BLOQUE"],
+                            "ANCHO.F.C":float(work.at[idx,"ANCHO.F.C"]),
+                            "ANCHO.F.M":float(work.at[idx,"ANCHO.F.M"]),
+                            "CONSUMO_C":float(work.at[idx,"CONSUMO_C"]),
+                            "FAMILIA":work.at[idx,"FAMILIA"],"COLOR_R":work.at[idx,"COLOR_R"],
+                            "STYLE":work.at[idx,"STYLE"],
+                            "LBS_ASIGNADAS":float(lbs_asig),
+                            "LBS_EXTRA_SOBRE_ORDEN":0.0,
+                            "APLICA_REGLA":"RESCUE",
+                            "PRIORIDAD_USADA":float(intento["MAXIMO"]),
+                            "PRIORIDAD_OBJETIVO":None,
+                            "ORIGEN_PRIORIDAD":"RESCUE",
+                            "PERMITIR_RANGO_SUPERIOR":0,
+                            "SPLIT_MIN_USADO":0.0,
+                            "DECISION_SCORE":0.0,
+                        })
+                        work.at[idx,"LBS_RESTANTES"]=max(0.0,float(work.at[idx,"LBS_RESTANTES"])-float(lbs_asig))
+                    det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
+                    bloques=[d["BLOQUE"] for d in det_lote]
+                    resumen.append({
+                        "LOTE_ID":lote_id,"ANCHOS_LOTE":anchos_lote_str,
+                        "CATEGORIA":intento["CATEGORIA"],"MIX":intento["MIX"],
+                        "TELA.CUERPO":tela,"COLOR/TONO_KEY":tono,
+                        "LBS_TOTAL":float(intento["TOTAL_LOTE"]),
+                        "MIN_RANGO":float(intento["MINIMO"]),"MAX_RANGO":float(intento["MAXIMO"]),
+                        "CAPACIDAD_PERDIDA":float(intento["MAXIMO"]-intento["TOTAL_LOTE"]),
+                        "SKU_DISTINTOS":len({d["LNK"] for d in det_lote}),
+                        "ANCHOS_UNICOS":len(anchos_lote),
+                        "BLOQUE_DOMINANTE":max(set(bloques),key=bloques.count) if bloques else "",
+                        "REGLA_DOMINANTE":"RESCUE",
+                        "PRIORIDAD_FINAL":float(intento["MAXIMO"]),
+                        "PRIORIDAD_OBJETIVO":None,
+                        "QUALITY_LEVEL":quality_level,
+                        "BEAM_WIDTH_USADO":beam_w,
+                    })
+                    capacity_used[intento["RANGO_ID"]]+=float(intento["TOTAL_LOTE"])
+                    lotes_formados+=1; lbs_procesadas+=float(intento["TOTAL_LOTE"])
+                    break  # found a range for this seed
 
         data.loc[work.index,"LBS_RESTANTES"]=work["LBS_RESTANTES"]
         data.loc[work.index,"LBS_SCRAP"]=work["LBS_SCRAP"]
