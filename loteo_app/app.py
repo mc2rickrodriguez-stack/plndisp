@@ -47,21 +47,28 @@ CAP_COLS=["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX",
 BOOL_CAP_COLS=["OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR",
                "SCRAP_REMAINDER","APPLY_RULES_BLEACH"]
 
-def _fix_bool_cols(df):
-    """Ensure bool columns are Python bool (not int/str) for CheckboxColumn."""
-    def to_bool(v):
+def _to_bool(v):
+    if v is None: return False
+    try:
         if pd.isna(v): return False
-        if isinstance(v,bool): return v
-        return str(v).strip().upper() in ("1","TRUE","YES","SI","SÍ","X")
+    except: pass
+    if isinstance(v, bool): return v
+    if isinstance(v, (int, float)): return bool(v)
+    return str(v).strip().upper() in ("1","TRUE","YES","SI","SÍ","X")
+
+def _fix_bool_cols(df):
+    """Force bool columns to dtype bool so st.data_editor renders checkboxes."""
+    df = df.copy()
     for col in BOOL_CAP_COLS:
-        if col in df.columns:
-            df[col]=df[col].apply(to_bool)
+        if col not in df.columns:
+            df[col] = False
+        df[col] = df[col].apply(_to_bool).astype(bool)
     return df
 
 def empty_cap():
-    df=pd.DataFrame(columns=CAP_COLS)
+    df = pd.DataFrame(columns=CAP_COLS)
     for col in BOOL_CAP_COLS:
-        df[col]=pd.Series(dtype=bool)
+        df[col] = pd.array([], dtype=bool)
     return df
 def empty_ra():   return pd.DataFrame(columns=["ANCHO_1","ANCHO_2","CAPACIDAD_PRIORIDAD_1","CAPACIDAD_PRIORIDAD_2","CAPACIDAD_PRIORIDAD_3"])
 def empty_ras():  return pd.DataFrame(columns=["STYLE","LIMITE_ANCHO","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"])
@@ -69,10 +76,13 @@ def empty_rc():   return pd.DataFrame(columns=["COLOR_R","PRIORIDAD_1","PRIORIDA
 def empty_rf():   return pd.DataFrame(columns=["FAMILIA","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3","PRIORIDAD_4"])
 def empty_comb(): return pd.DataFrame(columns=["PRIORIDAD_1","PRIORIDAD_2"])
 
-def get_tbl(key,factory):
-    t=st.session_state[key]
-    df= t if t is not None else factory()
-    if factory==empty_cap and not df.empty: df=_fix_bool_cols(df)
+def get_tbl(key, factory):
+    t = st.session_state[key]
+    df = t if t is not None else factory()
+    if factory == empty_cap:
+        df = _fix_bool_cols(df)
+        # Save back so future calls don't re-process
+        st.session_state[key] = df
     return df
 
 # ── Profile helpers ────────────────────────────────────────────────────────
@@ -117,31 +127,41 @@ def apply_profile(profile):
             st.session_state.params=params
         except: pass
 
+CAP_DEFAULTS = {
+    "MIN_DIFF": 0.0, "MAX_DIFF": 999.0, "MAX_WIDTHS": 3,
+    "MAX_SKU": 8, "WIDTHS_TARGET_ORDER": "2>3>1",
+    "OVERSHOOT": False, "UNDERSHOOT": False,
+    "PERMITIR_RANGO_SUPERIOR": False, "MAX_SALTO_RANGO": 1,
+    "SCRAP_REMAINDER": True, "APPLY_RULES_BLEACH": False,
+    "SPLIT_MIN_LBS": 100, "OVERSHOOT_TOL_PCT": 5.0,
+    "UNDERSHOOT_TOL_PCT": 2.0,
+}
+
 def load_tables_from_excel(raw):
-    xls=pd.ExcelFile(io.BytesIO(raw),engine="openpyxl")
-    BOOL_COLS=["OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR",
-               "SCRAP_REMAINDER","APPLY_RULES_BLEACH"]
-    def to_bool(v):
-        if pd.isna(v): return False
-        if isinstance(v,bool): return v
-        return str(v).strip().upper() in ("1","TRUE","YES","SI","SÍ","X")
-    def sr(sheet,factory):
+    xls = pd.ExcelFile(io.BytesIO(raw), engine="openpyxl")
+
+    def sr(sheet, factory):
         if sheet in xls.sheet_names:
-            df=pd.read_excel(io.BytesIO(raw),sheet_name=sheet,engine="openpyxl")
-            df.columns=[str(c).strip() for c in df.columns]
-            # Convert bool columns to real bool so CheckboxColumn renders correctly
-            for col in BOOL_COLS:
-                if col in df.columns:
-                    df[col]=df[col].apply(to_bool)
+            df = pd.read_excel(io.BytesIO(raw), sheet_name=sheet, engine="openpyxl")
+            df.columns = [str(c).strip() for c in df.columns]
             return df
         return factory()
-    st.session_state.tbl_capacidades          =sr("CAPACIDADES_TINTO",       empty_cap)
-    st.session_state.tbl_reglas_anchos        =sr("REGLAS_ANCHOS_COMBINADOS", empty_ra)
-    st.session_state.tbl_restricciones_ancho  =sr("RESTRICCIONES_ANCHO",      empty_ras)
-    st.session_state.tbl_restricciones_color  =sr("RESTRICCIONES_COLOR",      empty_rc)
-    st.session_state.tbl_restricciones_familia=sr("RESTRICCIONES_FAMILIA",    empty_rf)
-    st.session_state.tbl_combinaciones        =sr("COMBINACIONES_PRIORIDAD",   empty_comb)
-    st.session_state.cap_applied=False
+
+    # Load capacidades, add any missing columns with proper defaults
+    cap_raw = sr("CAPACIDADES_TINTO", empty_cap)
+    for col in CAP_COLS:
+        if col not in cap_raw.columns:
+            cap_raw[col] = CAP_DEFAULTS.get(col, None)
+    cap_raw = cap_raw[CAP_COLS]          # enforce column order
+    cap_raw = _fix_bool_cols(cap_raw)    # normalize all bool cols to Python bool
+
+    st.session_state.tbl_capacidades          = cap_raw
+    st.session_state.tbl_reglas_anchos        = sr("REGLAS_ANCHOS_COMBINADOS", empty_ra)
+    st.session_state.tbl_restricciones_ancho  = sr("RESTRICCIONES_ANCHO",      empty_ras)
+    st.session_state.tbl_restricciones_color  = sr("RESTRICCIONES_COLOR",      empty_rc)
+    st.session_state.tbl_restricciones_familia= sr("RESTRICCIONES_FAMILIA",    empty_rf)
+    st.session_state.tbl_combinaciones        = sr("COMBINACIONES_PRIORIDAD",   empty_comb)
+    st.session_state.cap_applied = False
 
 # ── Param rebuild from UI tables ───────────────────────────────────────────
 def rebuild_params(params2):
