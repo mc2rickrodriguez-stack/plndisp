@@ -339,6 +339,49 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
             prev=df_data if mix_sel=="Todos" else df_data[df_data["MIX"]==mix_sel]
             st.dataframe(prev.head(n_rows),use_container_width=True,height=220)
 
+        with st.expander("📊 Resumen dinámico de DATA"):
+            df_data=st.session_state.df_data
+            # Available grouping columns
+            GROUP_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO",
+                                     "MIX","PRIORIDAD","ANCHO.F.C","ANCHO.F.M","LNK"]
+                        if c in df_data.columns]
+            # Metric options
+            METRIC_OPTS={"LBS (TOTAL)":"TOTAL","Docenas (CONSUMO_C)":"CONSUMO_C"}
+            valid_metrics={k:v for k,v in METRIC_OPTS.items() if v in df_data.columns}
+
+            rc1,rc2,rc3=st.columns([3,3,2])
+            with rc1:
+                group_sel=st.multiselect(
+                    "Agrupar por",GROUP_OPTS,
+                    default=[GROUP_OPTS[0]] if GROUP_OPTS else [],
+                    key="rsm_group",
+                    help="Selecciona uno o más campos para agrupar"
+                )
+            with rc2:
+                metric_sel=st.selectbox(
+                    "Métrica",list(valid_metrics.keys()),key="rsm_metric"
+                )
+            with rc3:
+                top_n=st.number_input("Top N filas",min_value=5,max_value=500,value=50,step=5,key="rsm_n")
+
+            if group_sel and metric_sel:
+                metric_col=valid_metrics[metric_sel]
+                try:
+                    rsm=df_data.groupby(group_sel,as_index=False)[metric_col].sum()
+                    rsm=rsm.sort_values(metric_col,ascending=False).head(top_n)
+                    rsm[metric_col]=rsm[metric_col].round(1)
+                    rsm.columns=group_sel+[metric_sel]
+                    # % del total
+                    total_metric=df_data[metric_col].sum()
+                    rsm["% del Total"]=(rsm[metric_sel]/total_metric*100).round(1) if total_metric>0 else 0
+                    st.dataframe(rsm,use_container_width=True,height=min(60+35*len(rsm),400),
+                                 hide_index=True)
+                    st.caption(f"Total {metric_sel}: {df_data[metric_col].sum():,.1f} · Mostrando top {len(rsm)} de {len(df_data.groupby(group_sel))} grupos")
+                except Exception as e:
+                    st.error(f"Error al agrupar: {e}")
+            else:
+                st.info("Selecciona al menos un campo para agrupar.")
+
 # ── Sección 2: Capacidad ──────────────────────────────────────────────────
 with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
     st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
@@ -346,8 +389,27 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
                 unsafe_allow_html=True)
 
     tbl_cap=get_tbl("tbl_capacidades",empty_cap)
-    # dynamically size height
     h=min(60+35*max(len(tbl_cap),1),500)
+
+    # CSS to freeze first 3 columns in data_editor
+    st.markdown("""
+    <style>
+    div[data-testid="stDataEditor"] table thead tr th:nth-child(-n+4),
+    div[data-testid="stDataEditor"] table tbody tr td:nth-child(-n+4) {
+        position: sticky !important;
+        left: 0;
+        background: #f8fafc;
+        z-index: 2;
+        border-right: 2px solid #cbd5e1;
+    }
+    div[data-testid="stDataEditor"] table thead tr th:nth-child(2),
+    div[data-testid="stDataEditor"] table tbody tr td:nth-child(2) { left: 60px !important; }
+    div[data-testid="stDataEditor"] table thead tr th:nth-child(3),
+    div[data-testid="stDataEditor"] table tbody tr td:nth-child(3) { left: 130px !important; }
+    div[data-testid="stDataEditor"] table thead tr th:nth-child(4),
+    div[data-testid="stDataEditor"] table tbody tr td:nth-child(4) { left: 210px !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
     cap_ed=st.data_editor(
         tbl_cap, num_rows="dynamic", use_container_width=True, height=h, key="editor_cap",
@@ -633,13 +695,19 @@ _comment=res.get("comentario","")
 _ql_used=res.get("quality_used","?")
 st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  {'·  💬 '+_comment if _comment else ''}")
 
-k1,k2,k3,k4,k5=st.columns(5)
-k1.metric("Lotes",f"{len(df_res):,}")
-k2.metric("LBS asignadas",fmt(df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0))
-k3.metric("LBS excedentes",fmt(df_exc["LBS_RESTANTES"].sum() if not df_exc.empty else 0))
-k4.metric("LNKs completos",
+k1,k2,k3,k4,k5,k6,k7=st.columns(7)
+_lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
+_lbs_plan = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
+_lbs_plan_total = _lbs_plan["LBS_BASE"].sum() if not _lbs_plan.empty and "LBS_BASE" in _lbs_plan.columns else 0
+_pct_plan = (_lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0
+k1.metric("Lotes",          f"{len(df_res):,}")
+k2.metric("LBS Planeadas",  fmt(_lbs_plan_total))
+k3.metric("LBS Asignadas",  fmt(_lbs_asig))
+k4.metric("% vs Plan",      f"{_pct_plan:.1f}%")
+k5.metric("LBS Excedentes", fmt(df_exc["LBS_RESTANTES"].sum() if not df_exc.empty else 0))
+k6.metric("LNKs completos",
           f"{(lnk_df['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lnk_df)*100) if not lnk_df.empty else 0:.1f}%")
-k5.metric("Cap. perdida",fmt(df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0))
+k7.metric("Cap. perdida",   fmt(df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0))
 
 tab_g,tab_d,tab_r,tab_l,tab_c,tab_e=st.tabs([
     "📊 Gráficas","📋 Detalle Lotes","📄 Resumen",
@@ -657,16 +725,21 @@ with tab_g:
 
     st.divider()
     st.markdown("#### 📋 Tablas Resumen")
-    ta,tb,tc,td = st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría"])
+    ta,tb,tc,td,te = st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría","Resumen Dinámico"])
 
     with ta:
         if df_det.empty or prio_df.empty:
             st.info("Sin datos.")
         else:
             t1 = prio_df.copy()
-            lotes_bloque = df_res.groupby("BLOQUE_DOMINANTE")["LOTE_ID"].count().reset_index() if not df_res.empty else pd.DataFrame(columns=["BLOQUE_DOMINANTE","LOTE_ID"])
-            lotes_bloque.columns = ["BLOQUE","LOTES"]
-            t1 = t1.merge(lotes_bloque, left_on="BLOQUE", right_on="BLOQUE", how="left").fillna({"LOTES":0})
+            # FIX: lotes come from RESUMEN (1 row per lote), grouped by BLOQUE+MIX
+            if not df_res.empty and "BLOQUE_DOMINANTE" in df_res.columns:
+                lotes_bloque = (df_res.groupby(["BLOQUE_DOMINANTE","MIX"])
+                                .agg(LOTES=("LOTE_ID","nunique")).reset_index())
+                lotes_bloque.columns = ["BLOQUE","MIX","LOTES"]
+                t1 = t1.merge(lotes_bloque, on=["BLOQUE","MIX"], how="left").fillna({"LOTES":0})
+            else:
+                t1["LOTES"] = 0
             t1["LOTES"] = t1["LOTES"].astype(int)
             t1["% ASIGNADO"] = (t1["LBS_ASIGNADAS"] / t1["LBS_BASE"].replace(0,pd.NA) * 100).fillna(0).round(1)
             t1 = t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas",
@@ -678,9 +751,9 @@ with tab_g:
         if df_res.empty:
             st.info("Sin datos.")
         else:
-            t2 = df_res.groupby("ANCHOS_UNICOS").agg(
-                LBS_Asignadas=("LBS_TOTAL","sum"), Lotes=("LOTE_ID","count")
-            ).reset_index().sort_values("ANCHOS_UNICOS")
+            t2 = (df_res.groupby("ANCHOS_UNICOS")
+                  .agg(LBS_Asignadas=("LBS_TOTAL","sum"), Lotes=("LOTE_ID","nunique"))
+                  .reset_index().sort_values("ANCHOS_UNICOS"))
             t2.columns = ["N° Anchos","LBS Asignadas","Lotes"]
             total = t2["LBS Asignadas"].sum()
             t2["% del Total"] = (t2["LBS Asignadas"] / total * 100).round(1) if total>0 else 0
@@ -690,12 +763,12 @@ with tab_g:
         if df_res.empty:
             st.info("Sin datos.")
         else:
-            t3 = df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"]).agg(
-                LBS_Asignadas=("LBS_TOTAL","sum"),
-                Lotes=("LOTE_ID","count"),
-                Min_LBS_Lote=("LBS_TOTAL","min"),
-                Max_LBS_Lote=("LBS_TOTAL","max"),
-            ).reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"])
+            t3 = (df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"])
+                  .agg(LBS_Asignadas=("LBS_TOTAL","sum"),
+                       Lotes=("LOTE_ID","nunique"),
+                       Min_LBS_Lote=("LBS_TOTAL","min"),
+                       Max_LBS_Lote=("LBS_TOTAL","max"))
+                  .reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"]))
             t3.columns = ["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
             st.dataframe(t3, use_container_width=True, hide_index=True)
 
@@ -705,8 +778,8 @@ with tab_g:
         else:
             t4 = cap_df.copy()
             if not df_res.empty:
-                lotes_cat = df_res.groupby("CATEGORIA")["LOTE_ID"].count().reset_index()
-                lotes_cat.columns = ["CATEGORIA","LOTES"]
+                lotes_cat = (df_res.groupby("CATEGORIA")
+                             .agg(LOTES=("LOTE_ID","nunique")).reset_index())
                 t4 = t4.merge(lotes_cat, on="CATEGORIA", how="left").fillna({"LOTES":0})
                 t4["LOTES"] = t4["LOTES"].astype(int)
             disp = {"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX",
@@ -714,6 +787,40 @@ with tab_g:
                     "CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
             t4 = t4.rename(columns=disp)
             st.dataframe(t4[[v for v in disp.values() if v in t4.columns]], use_container_width=True, hide_index=True)
+
+    with te:
+        st.markdown("**Resumen dinámico de resultados** — agrupa los lotes generados por los campos que elijas.")
+        if df_det.empty:
+            st.info("Sin datos de lotes generados.")
+        else:
+            RES_GROUP_OPTS = [c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA",
+                                           "TONO","MIX","BLOQUE","APLICA_REGLA","CATEGORIA",
+                                           "PRIORIDAD","ANCHOS_LOTE","LNK"]
+                              if c in df_det.columns]
+            RES_METRIC_OPTS = {"LBS Asignadas":"LBS_ASIGNADAS","Docenas":"DOCENAS"}
+            valid_res_m = {k:v for k,v in RES_METRIC_OPTS.items() if v in df_det.columns}
+
+            re1,re2,re3 = st.columns([3,2,1])
+            rg_sel  = re1.multiselect("Agrupar por",RES_GROUP_OPTS,
+                                       default=["MIX","BLOQUE"] if "BLOQUE" in df_det.columns else RES_GROUP_OPTS[:1],
+                                       key="rg_sel")
+            rm_sel  = re2.selectbox("Métrica",list(valid_res_m.keys()),key="rm_sel")
+            rn_top  = re3.number_input("Top N",5,500,50,key="rn_top")
+
+            if rg_sel and rm_sel:
+                mc = valid_res_m[rm_sel]
+                try:
+                    rt = df_det.groupby(rg_sel,as_index=False)[mc].sum()
+                    rt = rt.sort_values(mc,ascending=False).head(rn_top)
+                    rt[mc] = rt[mc].round(1)
+                    total_m = df_det[mc].sum()
+                    rt["% del Total"] = (rt[mc]/total_m*100).round(1) if total_m>0 else 0
+                    rt = rt.rename(columns={mc:rm_sel})
+                    st.dataframe(rt, use_container_width=True, hide_index=True,
+                                 height=min(60+35*len(rt),420))
+                    st.caption(f"Total {rm_sel}: {total_m:,.1f} · {len(rt)} grupos")
+                except Exception as e:
+                    st.error(f"Error al agrupar: {e}")
 
 with tab_d:
     if df_det.empty: st.info("Sin lotes.")
