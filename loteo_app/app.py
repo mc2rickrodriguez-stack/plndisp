@@ -475,26 +475,43 @@ with st.expander("🎯  Sección 3 — Calidad del Loteo", expanded=True):
     cfg=st.session_state.cfg or {}
     def cv(k,d): return cfg.get(k,p.get(k,d))
 
-    ql_col,info_col=st.columns([2,1])
+    eng_col, ql_col, info_col = st.columns([1,2,1])
+    with eng_col:
+        engine_sel = st.radio(
+            "Motor",
+            ["Greedy (actual)", "OR-Tools (óptimo)"],
+            index=0,
+            key="engine_sel",
+            help="OR-Tools busca la solución óptima. Greedy es más rápido pero puede perder lotes.",
+        )
+        st.session_state["_engine"] = engine_sel
     with ql_col:
         quality_level=st.slider(
             "Calidad del loteo",min_value=1,max_value=10,
             value=int(cv("QUALITY_LEVEL",5)),
             key="quality_slider",
-            help="1 = Muy rápido (menos exhaustivo) · 10 = Óptimo (más lento)",
+            help="1 = Muy rápido · 10 = Óptimo (más lento)",
         )
-        # Always persist to session_state so it's available even when collapsed
         st.session_state["_quality_level"]=quality_level
         beam=quality_to_beam(quality_level)
-        st.caption(f"BEAM_WIDTH interno: **{beam}** · "
-                   f"{'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Lento/Óptimo'}")
+        if "OR-Tools" in engine_sel:
+            tl = 5.0 + quality_level * 5.5
+            st.caption(f"Tiempo límite por grupo: **{tl:.0f}s** · "
+                       f"{'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Exhaustivo'}")
+        else:
+            st.caption(f"BEAM_WIDTH: **{beam}** · "
+                       f"{'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Lento/Óptimo'}")
     with info_col:
         if st.session_state.df_data is not None:
             df_data=st.session_state.df_data
             groups_est=df_data.groupby(["TELA.CUERPO","MIX"]).ngroups
-            est_sec=groups_est*beam*0.075
+            if "OR-Tools" in engine_sel:
+                tl = 5.0 + quality_level * 5.5
+                est_sec = groups_est * tl * 0.3  # OR-Tools usually solves faster than limit
+            else:
+                est_sec=groups_est*beam*0.075
             st.metric("Grupos estimados",f"{groups_est:,}")
-            st.caption(f"⏱ Tiempo estimado: ~{est_sec/60:.1f} min")
+            st.caption(f"⏱ Estimado: ~{est_sec/60:.1f} min")
 
 # Read quality from session_state (safe even if expander was collapsed)
 _ql=st.session_state.get("_quality_level", int((st.session_state.cfg or {}).get("QUALITY_LEVEL",5)))
@@ -640,33 +657,177 @@ if run_btn and can_run:
         except Exception as e:
             st.error(f"Error: {e}"); st.session_state.running=False; st.stop()
 
-    prog=st.progress(0,text="Iniciando…")
-    stat=st.empty()
+    # ── Live animated dashboard ────────────────────────────────────────────
+    _dye_plan   = int(df_data2[df_data2["MIX"]=="DYE"]["TOTAL"].sum())   if not df_data2.empty else 0
+    _bl_plan    = int(df_data2[df_data2["MIX"]=="BLEACH"]["TOTAL"].sum()) if not df_data2.empty else 0
+    _total_plan = _dye_plan + _bl_plan
+    _total_grp  = df_data2.groupby(["TELA.CUERPO","MIX"]).ngroups if not df_data2.empty else 0
 
-    def cb(pct,msg,stats):
-        prog.progress(min(pct,0.99),text=msg)
-        stat.markdown(
-            f"**Grupo** {stats['grupo']}/{stats['total']} · "
-            f"**Lotes formados:** {stats['lotes']:,} · "
-            f"**LBS procesadas:** {fmt(stats['lbs'])}"
-        )
+    PRIO_COLORS = {"VENCIDOS":"#ef4444","AHEAD":"#f97316","AHEAD2":"#eab308","OTROS":"#6b7280"}
+    CAT_COLORS  = {4000:"#7c3aed",3300:"#1d4ed8",2600:"#0e7490",2200:"#065f46",1100:"#92400e"}
+
+    _state = {
+        "lotes":0,"rescues":0,"lbs":0.0,"dye_lbs":0.0,"bl_lbs":0.0,
+        "grupo":0,"tela":"—","regla":"—","mix":"—","bloque":"—",
+        "log":[],
+        "prio":{"VENCIDOS":0,"AHEAD":0,"AHEAD2":0,"OTROS":0},
+        "cat":{4000:0,3300:0,2600:0,2200:0,1100:0},
+        "done":False,"cancelled":False,
+    }
+
+    def _render(state):
+        lbs     = state["lbs"]
+        pct_p   = int(lbs/_total_plan*100) if _total_plan>0 else 0
+        pct_d   = min(100,int(state["dye_lbs"]/_dye_plan*100))  if _dye_plan>0  else 0
+        pct_b   = min(100,int(state["bl_lbs"]/_bl_plan*100))    if _bl_plan>0   else 0
+        pct_g   = min(100,int(state["grupo"]/_total_grp*100))   if _total_grp>0 else 0
+
+        log_html="".join(
+            f'<div style="color:{c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:1.6">{t}</div>'
+            for c,t in state["log"][-9:])
+
+        mx_p = max(state["prio"].values(),default=1) or 1
+        prio_bars="".join(
+            f'<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">'
+            f'<div style="font-size:9px;color:#9ca3af;width:52px;text-align:right;flex-shrink:0">{k}</div>'
+            f'<div style="flex:1;background:#e5e7eb;border-radius:2px;height:6px;overflow:hidden">'
+            f'<div style="width:{min(100,int(v/mx_p*100))}%;height:6px;background:{PRIO_COLORS[k]};border-radius:2px"></div></div>'
+            f'<div style="font-size:9px;color:#9ca3af;width:32px">{v/1000:.1f}k</div></div>'
+            for k,v in state["prio"].items())
+
+        mx_c = max(state["cat"].values(),default=1) or 1
+        cat_bars="".join(
+            f'<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">'
+            f'<div style="font-size:9px;color:#9ca3af;width:36px;text-align:right;flex-shrink:0">{k//1000}k</div>'
+            f'<div style="flex:1;background:#e5e7eb;border-radius:2px;height:6px;overflow:hidden">'
+            f'<div style="width:{min(100,int(v/mx_c*100))}%;height:6px;background:{CAT_COLORS[k]};border-radius:2px"></div></div>'
+            f'<div style="font-size:9px;color:#9ca3af;width:32px">{v/1000:.1f}k</div></div>'
+            for k,v in state["cat"].items())
+
+        dot_color = "#34d399" if not state["done"] else ("#f59e0b" if state["cancelled"] else "#34d399")
+        status    = ("⏹ Cancelado" if state["cancelled"] else "✅ Completado") if state["done"] else "Corriendo..."
+
+        _dash.markdown(f"""
+<div style="font-family:var(--font-sans);padding:.25rem 0">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+    <div style="background:#080d1a;border-radius:10px;padding:.9rem 1.1rem;border:.5px solid #1a2844;height:200px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end">
+      <div style="font-family:var(--font-mono,monospace)">{log_html}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Lotes</div>
+          <div style="font-size:18px;font-weight:500;color:var(--color-text-primary)">{state["lotes"]:,}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["rescues"]} rescates</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">LBS asignadas</div>
+          <div style="font-size:18px;font-weight:500;color:var(--color-text-primary)">{lbs/1000:.1f}k</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{pct_p}% del plan</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Grupo</div>
+          <div style="font-size:11px;font-weight:500;color:var(--color-text-primary);padding-top:3px">{state["tela"]}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["grupo"]} / {_total_grp}</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Última regla</div>
+          <div style="font-size:10px;font-weight:500;color:var(--color-text-primary);padding-top:3px">{state["regla"]}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["mix"]} · {state["bloque"]}</div>
+        </div>
+      </div>
+      <div style="background:var(--color-background-secondary);border-radius:8px;padding:.5rem .65rem">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-bottom:3px"><span>DYE</span><span>{pct_d}%</span></div>
+        <div style="background:#e5e7eb;border-radius:3px;height:5px;overflow:hidden;margin-bottom:6px"><div style="width:{pct_d}%;height:5px;background:#0ea5e9;border-radius:3px"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-bottom:3px"><span>BLEACH</span><span>{pct_b}%</span></div>
+        <div style="background:#e5e7eb;border-radius:3px;height:5px;overflow:hidden"><div style="width:{pct_b}%;height:5px;background:#8b5cf6;border-radius:3px"></div></div>
+      </div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+    <div style="background:var(--color-background-secondary);border-radius:8px;padding:.55rem .65rem">
+      <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">LBS por prioridad</div>
+      {prio_bars}
+    </div>
+    <div style="background:var(--color-background-secondary);border-radius:8px;padding:.55rem .65rem">
+      <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">LBS por categoría</div>
+      {cat_bars}
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></div>
+    <span style="font-size:11px;color:var(--color-text-secondary)">{status} · grupo {state["grupo"]}/{_total_grp} · {pct_g}% completado</span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    _dash = st.empty()
+    _cancel_slot = st.empty()
+    if _cancel_slot.button("⏹ Cancelar corrida", key="cancel_mid"):
+        st.session_state.cancel_flag[0] = True
+
+    _state["log"].append(("#34d399", f"NV2 LOTEO ENGINE v4 · {_total_grp} grupos · plan: {_total_plan/1000:.1f}k LBS"))
+    _render(_state)
+
+    _tick = [0]
+    _prev_grupo = [0]
+    # Render frequency: fewer renders = faster engine
+    # Quality 1-4: every 15 groups, Quality 5-7: every 8, Quality 8-10: every 4
+    _render_every = 15 if _ql <= 4 else (8 if _ql <= 7 else 4)
+
+    def cb_full(pct, msg, stats):
+        _tick[0] += 1
+        _state["grupo"] = stats["grupo"]
+        _state["lotes"] = stats["lotes"]
+        _state["lbs"]   = float(stats["lbs"])
+        if stats["grupo"] != _prev_grupo[0]:
+            _prev_grupo[0] = stats["grupo"]
+            tela = msg.split("Tela: ")[-1] if "Tela:" in msg else msg.split()[-1]
+            _state["tela"] = tela[:14]
+            _state["log"].append(("#1e40af", f"── grupo {stats['grupo']}/{_total_grp} · {tela[:16]} ──"))
+        if _tick[0] % _render_every == 0:
+            _render(_state)
 
     try:
-        df_det,df_res,df_exc,df_par,cancelled=run_loteo(
-            df_data2,df_cap2,params2,progress_callback=cb,
-            cancel_flag=st.session_state.cancel_flag)
-        if cancelled:
-            prog.progress(1.0,text="⏹ Cancelado — resultados parciales disponibles")
+        use_ortools = "OR-Tools" in st.session_state.get("_engine","Greedy")
+        if use_ortools:
+            from engine.loteo_ortools import run_loteo_ortools
+            df_det,df_res,df_exc,df_par,cancelled=run_loteo_ortools(
+                df_data2,df_cap2,params2,progress_callback=cb_full,
+                cancel_flag=st.session_state.cancel_flag)
         else:
-            prog.progress(1.0,text="✅ Loteo completado")
-        stat.empty()
+            df_det,df_res,df_exc,df_par,cancelled=run_loteo(
+                df_data2,df_cap2,params2,progress_callback=cb_full,
+                cancel_flag=st.session_state.cancel_flag)
     except Exception as e:
         st.error(f"Error en loteo: {e}"); st.session_state.running=False; st.stop()
+
+    # Final stats for dashboard
+    if not df_det.empty:
+        for bloque in ["VENCIDOS","AHEAD","AHEAD2","OTROS"]:
+            _state["prio"][bloque] = float(df_det[df_det["BLOQUE"]==bloque]["LBS_ASIGNADAS"].sum())
+        _state["dye_lbs"] = float(df_det[df_det["MIX"]=="DYE"]["LBS_ASIGNADAS"].sum())
+        _state["bl_lbs"]  = float(df_det[df_det["MIX"]=="BLEACH"]["LBS_ASIGNADAS"].sum())
+        _state["rescues"] = int((df_det["APLICA_REGLA"]=="RESCUE").sum())
+        _state["lotes"]   = len(df_res)
+        _state["lbs"]     = float(df_det["LBS_ASIGNADAS"].sum())
+        if not df_res.empty:
+            for cat in [4000,3300,2600,2200,1100]:
+                mask = df_res["MAX_RANGO"]==cat
+                lids = df_res[mask]["LOTE_ID"].unique()
+                _state["cat"][cat] = float(df_det[df_det["LOTE_ID"].isin(lids)]["LBS_ASIGNADAS"].sum())
+        _state["log"].append(("#34d399", f"COMPLETADO · {len(df_res):,} lotes · {_state['lbs']/1000:.1f}k LBS"))
+
+    _state["done"] = True
+    _state["cancelled"] = cancelled
+    _render(_state)
+    _cancel_slot.empty()
+
 
     result={"ts":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "label":datetime.now().strftime("%H:%M:%S"),
             "comentario":st.session_state.get("run_comment",""),
             "quality_used":_ql,
+            "engine": "OR-Tools" if "OR-Tools" in st.session_state.get("_engine","Greedy") else "Greedy",
             "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
             "params_out":df_par,
             "reports":build_reports(df_data2,df_cap2,df_det,df_res),
@@ -693,7 +854,8 @@ st.divider()
 st.markdown("### 📊 Resultados")
 _comment=res.get("comentario","")
 _ql_used=res.get("quality_used","?")
-st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  {'·  💬 '+_comment if _comment else ''}")
+_eng_used=res.get("engine","Greedy")
+st.caption(f"Corrida: {res['ts']}  ·  Motor: {_eng_used}  ·  Calidad: {_ql_used}  {'·  💬 '+_comment if _comment else ''}")
 
 k1,k2,k3,k4,k5,k6,k7=st.columns(7)
 _lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
@@ -872,6 +1034,7 @@ with tab_c:
             lc=r["reports"].get("LNK_COMPLETITUD",pd.DataFrame())
             rows.append({
                 "#":i+1, "Hora":r["label"],
+                "Motor":r.get("engine","Greedy"),
                 "Calidad":r.get("quality_used","?"),
                 "Comentario":r.get("comentario","—"),
                 "Lotes":len(s),
