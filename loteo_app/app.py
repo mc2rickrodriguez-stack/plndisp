@@ -640,201 +640,161 @@ if run_btn and can_run:
         except Exception as e:
             st.error(f"Error: {e}"); st.session_state.running=False; st.stop()
 
-    # ── Animated dashboard ───────────────────────────────────────────────
-    # Compute plan totals from input data for % vs plan
-    _dye_plan  = int(df_data2[df_data2["MIX"]=="DYE"]["TOTAL"].sum())  if not df_data2.empty else 0
-    _bl_plan   = int(df_data2[df_data2["MIX"]=="BLEACH"]["TOTAL"].sum()) if not df_data2.empty else 0
-    _total_plan= _dye_plan + _bl_plan
-    _total_grp = df_data2.groupby(["TELA.CUERPO","MIX"]).ngroups if not df_data2.empty else 0
+    # ── Live animated dashboard ────────────────────────────────────────────
+    _dye_plan   = int(df_data2[df_data2["MIX"]=="DYE"]["TOTAL"].sum())   if not df_data2.empty else 0
+    _bl_plan    = int(df_data2[df_data2["MIX"]=="BLEACH"]["TOTAL"].sum()) if not df_data2.empty else 0
+    _total_plan = _dye_plan + _bl_plan
+    _total_grp  = df_data2.groupby(["TELA.CUERPO","MIX"]).ngroups if not df_data2.empty else 0
 
-    _anim_html = f"""
-<style>
-#nv2wrap{{font-family:var(--font-sans);padding:.5rem 0}}
-#nv2top{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px}}
-#nv2screen{{background:#080d1a;border-radius:var(--border-radius-lg);padding:.9rem 1.1rem;border:.5px solid #1a2844;position:relative;overflow:hidden;height:210px}}
-#nv2scan{{position:absolute;top:0;left:0;right:0;height:1px;background:rgba(56,189,248,.13);animation:sc 2.5s linear infinite;pointer-events:none}}
-@keyframes sc{{0%{{top:0}}100%{{top:100%}}}}
-#nv2log{{font-family:var(--font-mono,monospace);font-size:11px;line-height:1.65;color:#7dd3fc;display:flex;flex-direction:column;height:100%;overflow:hidden;justify-content:flex-end;gap:0}}
-.nll{{animation:nfi .15s forwards;opacity:0}}
-@keyframes nfi{{to{{opacity:1}}}}
-.nc-head{{color:#34d399;font-size:10px;letter-spacing:.06em}}
-.nc-id{{color:#fbbf24;font-weight:500}}
-.nc-dye{{color:#38bdf8}}.nc-bl{{color:#a78bfa}}
-.nc-lbs{{color:#fb923c}}.nc-ok{{color:#34d399}}
-.nc-rescue{{color:#f472b6}}.nc-dim{{color:#2a4a6a}}
-.nc-sep{{color:#1a3050}}.nc-reg{{color:#818cf8}}.nc-cat{{color:#c084fc}}
-.ncursor{{display:inline-block;width:6px;height:11px;background:#38bdf8;animation:bk .8s step-end infinite;vertical-align:middle;margin-left:2px}}
-@keyframes bk{{50%{{opacity:0}}}}
-#nv2right{{display:flex;flex-direction:column;gap:9px}}
-#nv2stats{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}
-.nstat{{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.5rem .65rem}}
-.nstat-lbl{{font-size:10px;color:var(--color-text-secondary);letter-spacing:.04em;text-transform:uppercase;margin-bottom:1px}}
-.nstat-val{{font-size:19px;font-weight:500;color:var(--color-text-primary);font-variant-numeric:tabular-nums;line-height:1.2}}
-.nstat-sub{{font-size:10px;color:var(--color-text-secondary);margin-top:1px}}
-#nv2prog{{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.55rem .7rem}}
-.nprog-lbl{{font-size:10px;color:var(--color-text-secondary);letter-spacing:.04em;display:flex;justify-content:space-between;margin-bottom:4px}}
-.nprog-bg{{background:var(--color-border-tertiary);border-radius:3px;height:5px;overflow:hidden;margin-bottom:6px}}
-.nprog-fill{{height:5px;border-radius:3px;width:0%;transition:width .35s ease}}
-.pf-dye{{background:#0ea5e9}}.pf-bl{{background:#8b5cf6}}
-#nv2bottom{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
-.nchart{{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.6rem .7rem}}
-.nchart-lbl{{font-size:10px;color:var(--color-text-secondary);letter-spacing:.04em;text-transform:uppercase;margin-bottom:5px}}
-.nbar-row{{display:flex;align-items:center;gap:6px;margin-bottom:4px}}
-.nbar-name{{font-size:10px;color:var(--color-text-secondary);width:40px;text-align:right;flex-shrink:0}}
-.nbar-bg{{flex:1;background:var(--color-border-tertiary);border-radius:2px;height:7px;overflow:hidden}}
-.nbar-fill{{height:7px;border-radius:2px;transition:width .4s ease}}
-.nbar-val{{font-size:10px;color:var(--color-text-secondary);width:38px;font-variant-numeric:tabular-nums}}
-#nv2status{{display:flex;align-items:center;gap:7px;margin-top:8px}}
-#ndot{{width:8px;height:8px;border-radius:50%;background:#1a3050;transition:background .3s;flex-shrink:0}}
-#ndot.active{{background:#34d399;animation:np .8s ease-in-out infinite alternate}}
-@keyframes np{{to{{opacity:.35}}}}
-#nstxt{{font-size:11px;color:var(--color-text-secondary)}}
-</style>
-<div id="nv2wrap">
-  <div id="nv2top">
-    <div id="nv2screen">
-      <div id="nv2scan"></div>
-      <div id="nv2log"><div class="nll nc-head">NV2 LOTEO ENGINE v4 · {_total_grp} grupos · plan: {{fmtN({_total_plan})}} LBS&nbsp;<span class="ncursor"></span></div></div>
+    PRIO_COLORS = {"VENCIDOS":"#ef4444","AHEAD":"#f97316","AHEAD2":"#eab308","OTROS":"#6b7280"}
+    CAT_COLORS  = {4000:"#7c3aed",3300:"#1d4ed8",2600:"#0e7490",2200:"#065f46",1100:"#92400e"}
+
+    _state = {
+        "lotes":0,"rescues":0,"lbs":0.0,"dye_lbs":0.0,"bl_lbs":0.0,
+        "grupo":0,"tela":"—","regla":"—","mix":"—","bloque":"—",
+        "log":[],
+        "prio":{"VENCIDOS":0,"AHEAD":0,"AHEAD2":0,"OTROS":0},
+        "cat":{4000:0,3300:0,2600:0,2200:0,1100:0},
+        "done":False,"cancelled":False,
+    }
+
+    def _render(state):
+        lbs     = state["lbs"]
+        pct_p   = int(lbs/_total_plan*100) if _total_plan>0 else 0
+        pct_d   = min(100,int(state["dye_lbs"]/_dye_plan*100))  if _dye_plan>0  else 0
+        pct_b   = min(100,int(state["bl_lbs"]/_bl_plan*100))    if _bl_plan>0   else 0
+        pct_g   = min(100,int(state["grupo"]/_total_grp*100))   if _total_grp>0 else 0
+
+        log_html="".join(
+            f'<div style="color:{c};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:1.6">{t}</div>'
+            for c,t in state["log"][-9:])
+
+        mx_p = max(state["prio"].values(),default=1) or 1
+        prio_bars="".join(
+            f'<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">'
+            f'<div style="font-size:9px;color:#9ca3af;width:52px;text-align:right;flex-shrink:0">{k}</div>'
+            f'<div style="flex:1;background:#e5e7eb;border-radius:2px;height:6px;overflow:hidden">'
+            f'<div style="width:{min(100,int(v/mx_p*100))}%;height:6px;background:{PRIO_COLORS[k]};border-radius:2px"></div></div>'
+            f'<div style="font-size:9px;color:#9ca3af;width:32px">{v/1000:.1f}k</div></div>'
+            for k,v in state["prio"].items())
+
+        mx_c = max(state["cat"].values(),default=1) or 1
+        cat_bars="".join(
+            f'<div style="display:flex;align-items:center;gap:5px;margin-bottom:3px">'
+            f'<div style="font-size:9px;color:#9ca3af;width:36px;text-align:right;flex-shrink:0">{k//1000}k</div>'
+            f'<div style="flex:1;background:#e5e7eb;border-radius:2px;height:6px;overflow:hidden">'
+            f'<div style="width:{min(100,int(v/mx_c*100))}%;height:6px;background:{CAT_COLORS[k]};border-radius:2px"></div></div>'
+            f'<div style="font-size:9px;color:#9ca3af;width:32px">{v/1000:.1f}k</div></div>'
+            for k,v in state["cat"].items())
+
+        dot_color = "#34d399" if not state["done"] else ("#f59e0b" if state["cancelled"] else "#34d399")
+        status    = ("⏹ Cancelado" if state["cancelled"] else "✅ Completado") if state["done"] else "Corriendo..."
+
+        _dash.markdown(f"""
+<div style="font-family:var(--font-sans);padding:.25rem 0">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
+    <div style="background:#080d1a;border-radius:10px;padding:.9rem 1.1rem;border:.5px solid #1a2844;height:200px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end">
+      <div style="font-family:var(--font-mono,monospace)">{log_html}</div>
     </div>
-    <div id="nv2right">
-      <div id="nv2stats">
-        <div class="nstat"><div class="nstat-lbl">Lotes</div><div class="nstat-val" id="ns-lotes">0</div><div class="nstat-sub" id="ns-rsub">0 rescates</div></div>
-        <div class="nstat"><div class="nstat-lbl">LBS asignadas</div><div class="nstat-val" id="ns-lbs">0</div><div class="nstat-sub" id="ns-pct">0% del plan</div></div>
-        <div class="nstat"><div class="nstat-lbl">Grupo</div><div class="nstat-val" id="ns-grp" style="font-size:12px;padding-top:5px">—</div><div class="nstat-sub" id="ns-gsub">0 / {_total_grp}</div></div>
-        <div class="nstat"><div class="nstat-lbl">Última regla</div><div class="nstat-val" id="ns-reg" style="font-size:11px;padding-top:5px">—</div><div class="nstat-sub" id="ns-msub">—</div></div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Lotes</div>
+          <div style="font-size:18px;font-weight:500;color:var(--color-text-primary)">{state["lotes"]:,}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["rescues"]} rescates</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">LBS asignadas</div>
+          <div style="font-size:18px;font-weight:500;color:var(--color-text-primary)">{lbs/1000:.1f}k</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{pct_p}% del plan</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Grupo</div>
+          <div style="font-size:11px;font-weight:500;color:var(--color-text-primary);padding-top:3px">{state["tela"]}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["grupo"]} / {_total_grp}</div>
+        </div>
+        <div style="background:var(--color-background-secondary);border-radius:8px;padding:.45rem .6rem">
+          <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em">Última regla</div>
+          <div style="font-size:10px;font-weight:500;color:var(--color-text-primary);padding-top:3px">{state["regla"]}</div>
+          <div style="font-size:10px;color:var(--color-text-secondary)">{state["mix"]} · {state["bloque"]}</div>
+        </div>
       </div>
-      <div id="nv2prog">
-        <div class="nprog-lbl"><span>DYE</span><span id="nd-lbl">0%</span></div>
-        <div class="nprog-bg"><div class="nprog-fill pf-dye" id="nd-fill"></div></div>
-        <div class="nprog-lbl"><span>BLEACH</span><span id="nb-lbl">0%</span></div>
-        <div class="nprog-bg"><div class="nprog-fill pf-bl" id="nb-fill"></div></div>
+      <div style="background:var(--color-background-secondary);border-radius:8px;padding:.5rem .65rem">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-bottom:3px"><span>DYE</span><span>{pct_d}%</span></div>
+        <div style="background:#e5e7eb;border-radius:3px;height:5px;overflow:hidden;margin-bottom:6px"><div style="width:{pct_d}%;height:5px;background:#0ea5e9;border-radius:3px"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--color-text-secondary);margin-bottom:3px"><span>BLEACH</span><span>{pct_b}%</span></div>
+        <div style="background:#e5e7eb;border-radius:3px;height:5px;overflow:hidden"><div style="width:{pct_b}%;height:5px;background:#8b5cf6;border-radius:3px"></div></div>
       </div>
     </div>
   </div>
-  <div id="nv2bottom">
-    <div class="nchart"><div class="nchart-lbl">LBS por prioridad</div><div id="nb-prio"></div></div>
-    <div class="nchart"><div class="nchart-lbl">LBS por categoría</div><div id="nb-cat"></div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+    <div style="background:var(--color-background-secondary);border-radius:8px;padding:.55rem .65rem">
+      <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">LBS por prioridad</div>
+      {prio_bars}
+    </div>
+    <div style="background:var(--color-background-secondary);border-radius:8px;padding:.55rem .65rem">
+      <div style="font-size:10px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">LBS por categoría</div>
+      {cat_bars}
+    </div>
   </div>
-  <div id="nv2status"><div id="ndot" class="active"></div><span id="nstxt">Corriendo loteo...</span></div>
-</div>
-<script>
-const _DYE_PLAN={_dye_plan}, _BL_PLAN={_bl_plan}, _TOTAL_PLAN={_total_plan}, _TOTAL_GRP={_total_grp};
-const PRIO_COLORS={{VENCIDOS:'#ef4444',AHEAD:'#f97316',AHEAD2:'#eab308',OTROS:'#6b7280'}};
-const CAT_COLORS={{4000:'#7c3aed',3300:'#1d4ed8',2600:'#0e7490',2200:'#065f46',1100:'#92400e'}};
-let _lotes=0,_rescues=0,_lbsT=0,_dyeL=0,_blL=0,_grupo=0;
-let _prioLbs={{VENCIDOS:0,AHEAD:0,AHEAD2:0,OTROS:0}};
-let _catLbs={{4000:0,3300:0,2600:0,2200:0,1100:0}};
-const MAX_LOG=10;
-function fmtN(n){{return n>=1000?(n/1000).toFixed(1)+'k':String(n)}}
-function addLog(html){{
-  const log=document.getElementById('nv2log');
-  const d=document.createElement('div');d.className='nll';d.innerHTML=html;
-  log.appendChild(d);
-  while(log.children.length>MAX_LOG)log.removeChild(log.firstChild);
-}}
-function renderBars(id,data,colorMap){{
-  const maxV=Math.max(...Object.values(data),1);
-  document.getElementById(id).innerHTML=Object.entries(data).map(([k,v])=>{{
-    const pct=Math.round(v/maxV*100);
-    return '<div class="nbar-row"><div class="nbar-name">'+k+'</div><div class="nbar-bg"><div class="nbar-fill" style="width:'+pct+'%;background:'+(colorMap[k]||'#4b5563')+'"></div></div><div class="nbar-val">'+fmtN(v)+'</div></div>';
-  }}).join('');
-}}
-function updateDash(){{
-  document.getElementById('ns-lotes').textContent=_lotes.toLocaleString();
-  document.getElementById('ns-lbs').textContent=fmtN(_lbsT);
-  document.getElementById('ns-rsub').textContent=_rescues+' rescates';
-  const pct=_TOTAL_PLAN>0?Math.min(100,Math.round(_lbsT/_TOTAL_PLAN*100)):0;
-  document.getElementById('ns-pct').textContent=pct+'% del plan';
-  document.getElementById('ns-gsub').textContent=_grupo+' / '+_TOTAL_GRP;
-  const dp=_DYE_PLAN>0?Math.min(100,Math.round(_dyeL/_DYE_PLAN*100)):0;
-  const bp=_BL_PLAN>0?Math.min(100,Math.round(_blL/_BL_PLAN*100)):0;
-  document.getElementById('nd-fill').style.width=dp+'%';
-  document.getElementById('nd-lbl').textContent=dp+'%';
-  document.getElementById('nb-fill').style.width=bp+'%';
-  document.getElementById('nb-lbl').textContent=bp+'%';
-  renderBars('nb-prio',_prioLbs,PRIO_COLORS);
-  renderBars('nb-cat',_catLbs,CAT_COLORS);
-}}
-window.nv2Update=function(data){{
-  const d=typeof data==='string'?JSON.parse(data):data;
-  if(d.type==='lote'){{
-    _lotes++;
-    if(d.rescue)_rescues++;
-    _lbsT+=d.lbs;
-    if(d.mix==='DYE')_dyeL+=d.lbs;else _blL+=d.lbs;
-    _prioLbs[d.bloque]=(_prioLbs[d.bloque]||0)+d.lbs;
-    if(!d.rescue&&d.cat)_catLbs[d.cat]=(_catLbs[d.cat]||0)+d.lbs;
-    document.getElementById('ns-grp').textContent=d.tela||'—';
-    document.getElementById('ns-reg').textContent=d.regla||'—';
-    document.getElementById('ns-msub').textContent=(d.mix||'—')+' · '+(d.bloque||'—');
-    const mixCls=d.mix==='DYE'?'nc-dye':'nc-bl';
-    const rescueCls=d.rescue?'nc-rescue':'nc-cat';
-    addLog('<span class="nc-id">'+d.id+'</span> <span class="nc-dim">'+d.tela+'</span> <span class="'+mixCls+'">'+d.mix+'</span> <span class="nc-reg">['+d.regla+']</span> <span class="'+rescueCls+'">'+(d.cat||'RSC')+'</span> <span class="nc-lbs">'+d.lbs.toLocaleString()+' LBS</span> <span class="nc-dim">⌀['+d.anchos+']</span><span class="nc-ok"> ✓</span>');
-    updateDash();
-  }} else if(d.type==='grupo'){{
-    _grupo=d.n;
-    addLog('<span class="nc-sep">── grupo '+d.n+'/'+_TOTAL_GRP+' · '+d.tela+' ──</span>');
-    updateDash();
-  }} else if(d.type==='done'){{
-    document.getElementById('ndot').classList.remove('active');
-    document.getElementById('nstxt').textContent='Completado · '+_lotes+' lotes · '+fmtN(_lbsT)+' LBS asignadas';
-    document.getElementById('nd-fill').style.width='100%';
-    document.getElementById('nd-lbl').textContent='100%';
-    addLog('<span class="nc-ok">✓ LOTEO COMPLETADO · '+_lotes+' lotes · '+fmtN(_lbsT)+' LBS asignadas</span>');
-  }} else if(d.type==='cancel'){{
-    document.getElementById('ndot').classList.remove('active');
-    document.getElementById('nstxt').textContent='⏹ Cancelado — '+_lotes+' lotes generados';
-  }}
-}};
-updateDash();
-</script>
-"""
-    # Replace {fmtN(...)} placeholder in html (simple template)
-    import re as _re
-    _anim_html = _re.sub(r'\{fmtN\((\d+)\)\}',
-                          lambda m: (str(int(m.group(1))//1000)+'k' if int(m.group(1))>=1000 else m.group(1)),
-                          _anim_html)
+  <div style="display:flex;align-items:center;gap:8px">
+    <div style="width:8px;height:8px;border-radius:50%;background:{dot_color};flex-shrink:0"></div>
+    <span style="font-size:11px;color:var(--color-text-secondary)">{status} · grupo {state["grupo"]}/{_total_grp} · {pct_g}% completado</span>
+  </div>
+</div>""", unsafe_allow_html=True)
 
-    _anim_slot = st.empty()
-    _anim_slot.html(_anim_html, height=420)
-
-    # Wire progress_callback to push updates into the HTML component via session state
-    # Since Streamlit doesn't support bidirectional JS calls mid-run,
-    # we update a compact text log below the animation and let JS handle visuals
-    _log_slot = st.empty()
+    _dash = st.empty()
     _cancel_slot = st.empty()
     if _cancel_slot.button("⏹ Cancelar corrida", key="cancel_mid"):
         st.session_state.cancel_flag[0] = True
 
-    _lote_count = [0]
-    _lbs_count  = [0.0]
+    _state["log"].append(("#34d399", f"NV2 LOTEO ENGINE v4 · {_total_grp} grupos · plan: {_total_plan/1000:.1f}k LBS"))
+    _render(_state)
 
-    def cb(pct, msg, stats):
-        _lote_count[0] = stats['lotes']
-        _lbs_count[0]  = stats['lbs']
-        _log_slot.caption(
-            f"⚙️ Grupo {stats['grupo']}/{stats['total']} · "
-            f"**{stats['lotes']:,}** lotes · "
-            f"**{fmt(stats['lbs'])}** LBS procesadas"
-        )
+    _tick = [0]
+    _prev_grupo = [0]
+
+    def cb_full(pct, msg, stats):
+        _tick[0] += 1
+        _state["grupo"] = stats["grupo"]
+        _state["lotes"] = stats["lotes"]
+        _state["lbs"]   = float(stats["lbs"])
+        if stats["grupo"] != _prev_grupo[0]:
+            _prev_grupo[0] = stats["grupo"]
+            tela = msg.split("Tela: ")[-1] if "Tela:" in msg else msg.split()[-1]
+            _state["tela"] = tela[:14]
+            _state["log"].append(("#1e40af", f"── grupo {stats['grupo']}/{_total_grp} · {tela[:16]} ──"))
+        if _tick[0] % 5 == 0:
+            _render(_state)
 
     try:
         df_det,df_res,df_exc,df_par,cancelled=run_loteo(
-            df_data2,df_cap2,params2,progress_callback=cb,
+            df_data2,df_cap2,params2,progress_callback=cb_full,
             cancel_flag=st.session_state.cancel_flag)
     except Exception as e:
         st.error(f"Error en loteo: {e}"); st.session_state.running=False; st.stop()
 
-    # Final update to animation
-    _final_lotes = len(df_res)
-    _final_lbs   = int(df_det["LBS_ASIGNADAS"].sum()) if not df_det.empty else 0
-    _status = "cancel" if cancelled else "done"
-    _anim_slot.html(_anim_html.replace(
-        "Corriendo loteo...",
-        f"{'⏹ Cancelado' if cancelled else '✅ Completado'} · {_final_lotes:,} lotes · {fmt(_final_lbs)} LBS"
-    ), height=420)
-    _log_slot.empty()
+    # Final stats for dashboard
+    if not df_det.empty:
+        for bloque in ["VENCIDOS","AHEAD","AHEAD2","OTROS"]:
+            _state["prio"][bloque] = float(df_det[df_det["BLOQUE"]==bloque]["LBS_ASIGNADAS"].sum())
+        _state["dye_lbs"] = float(df_det[df_det["MIX"]=="DYE"]["LBS_ASIGNADAS"].sum())
+        _state["bl_lbs"]  = float(df_det[df_det["MIX"]=="BLEACH"]["LBS_ASIGNADAS"].sum())
+        _state["rescues"] = int((df_det["APLICA_REGLA"]=="RESCUE").sum())
+        _state["lotes"]   = len(df_res)
+        _state["lbs"]     = float(df_det["LBS_ASIGNADAS"].sum())
+        if not df_res.empty:
+            for cat in [4000,3300,2600,2200,1100]:
+                mask = df_res["MAX_RANGO"]==cat
+                lids = df_res[mask]["LOTE_ID"].unique()
+                _state["cat"][cat] = float(df_det[df_det["LOTE_ID"].isin(lids)]["LBS_ASIGNADAS"].sum())
+        _state["log"].append(("#34d399", f"COMPLETADO · {len(df_res):,} lotes · {_state['lbs']/1000:.1f}k LBS"))
+
+    _state["done"] = True
+    _state["cancelled"] = cancelled
+    _render(_state)
     _cancel_slot.empty()
+
 
     result={"ts":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "label":datetime.now().strftime("%H:%M:%S"),
