@@ -32,8 +32,16 @@ for k,v in {
     "profiles":{},"cfg":{},
     "cancel_flag":[False],
     "running":False,
+    # Version counter: bump this whenever tables are loaded externally
+    # (profile load, file upload). Forces data_editor widgets to re-create
+    # from scratch instead of keeping stale widget state.
+    "tbl_version": 0,
 }.items():
     if k not in st.session_state: st.session_state[k]=v
+
+def _bump_tbl_version():
+    """Call after any external write to tbl_* so editors refresh."""
+    st.session_state["tbl_version"] = st.session_state.get("tbl_version", 0) + 1
 
 def fmt(v): return f"{v:,.0f}"
 
@@ -117,6 +125,7 @@ def apply_profile(profile):
     st.session_state.tbl_combinaciones        =j2df(t.get("combinaciones"),empty_comb)
     st.session_state.cfg=profile.get("overrides",{})
     st.session_state.cap_applied=False
+    _bump_tbl_version()  # force all data_editors to re-render with new data
     if "file_b64" in profile:
         raw=base64.b64decode(profile["file_b64"])
         st.session_state.raw_file_bytes=raw
@@ -162,6 +171,7 @@ def load_tables_from_excel(raw):
     st.session_state.tbl_restricciones_familia= sr("RESTRICCIONES_FAMILIA",    empty_rf)
     st.session_state.tbl_combinaciones        = sr("COMBINACIONES_PRIORIDAD",   empty_comb)
     st.session_state.cap_applied = False
+    _bump_tbl_version()  # force all data_editors to re-render with new data
 
 # ── Param rebuild from UI tables ───────────────────────────────────────────
 def rebuild_params(params2):
@@ -412,7 +422,7 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
     """, unsafe_allow_html=True)
 
     cap_ed=st.data_editor(
-        tbl_cap, num_rows="dynamic", use_container_width=True, height=h, key="editor_cap",
+        tbl_cap, num_rows="dynamic", use_container_width=True, height=h, key=f"editor_cap_{st.session_state.get("tbl_version",0)}",
         column_config={
             "CATEGORIA":  st.column_config.TextColumn("Categoría",width="small"),
             "MINIMO":     st.column_config.NumberColumn("Mín LBS",format="%d"),
@@ -439,8 +449,9 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
     b_col,s_col=st.columns([1,3])
     with b_col:
         if st.button("✅ Aplicar cambios de capacidad",type="primary",use_container_width=True):
-            st.session_state.tbl_capacidades=cap_ed; st.session_state.cap_applied=True
-            st.success("Capacidades actualizadas")
+            st.session_state.tbl_capacidades = cap_ed
+            st.session_state.cap_applied = True
+            st.rerun()
     with s_col:
         if st.session_state.cap_applied:
             cap_ok=get_tbl("tbl_capacidades",empty_cap)
@@ -526,7 +537,7 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
     with rt1:
         st.markdown('<div class="info-note">Pares de anchos que pueden combinarse + prioridades de tamaño. Vacía = libre.</div>',unsafe_allow_html=True)
         ra_ed=st.data_editor(get_tbl("tbl_reglas_anchos",empty_ra),num_rows="dynamic",
-                             use_container_width=True,key="editor_ra",
+                             use_container_width=True,key=f"editor_ra_{st.session_state.get("tbl_version",0)}",
                              column_config={
                                  "ANCHO_1":st.column_config.NumberColumn("Ancho 1",format="%.1f"),
                                  "ANCHO_2":st.column_config.NumberColumn("Ancho 2",format="%.1f"),
@@ -534,13 +545,14 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
                                  "CAPACIDAD_PRIORIDAD_2":st.column_config.NumberColumn("Prioridad 2 (LBS)",format="%d"),
                                  "CAPACIDAD_PRIORIDAD_3":st.column_config.NumberColumn("Prioridad 3 (LBS)",format="%d"),
                              })
-        if st.button("💾 Guardar",key="save_ra"): st.session_state.tbl_reglas_anchos=ra_ed; st.success("Guardado")
+        if st.button("💾 Guardar",key="save_ra"):
+            st.session_state.tbl_reglas_anchos=ra_ed; st.rerun()
 
     with rt2:
         st.markdown('<div class="info-note">Si el STYLE tiene un ancho ≤ LIMITE_ANCHO, prioriza los tamaños indicados. '
                     'Reemplaza la antigua regla ANCHO18.</div>',unsafe_allow_html=True)
         ras_ed=st.data_editor(get_tbl("tbl_restricciones_ancho",empty_ras),num_rows="dynamic",
-                              use_container_width=True,key="editor_ras",
+                              use_container_width=True,key=f"editor_ras_{st.session_state.get("tbl_version",0)}",
                               column_config={
                                   "STYLE":st.column_config.TextColumn("STYLE",width="medium"),
                                   "LIMITE_ANCHO":st.column_config.NumberColumn("Límite Ancho",format="%.1f"),
@@ -552,22 +564,24 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
         if srch and not ras_ed.empty:
             f=ras_ed[ras_ed["STYLE"].astype(str).str.upper().str.contains(srch.upper(),na=False)]
             st.dataframe(f,use_container_width=True) if not f.empty else st.caption("Sin resultados")
-        if st.button("💾 Guardar",key="save_ras"): st.session_state.tbl_restricciones_ancho=ras_ed; st.success("Guardado")
+        if st.button("💾 Guardar",key="save_ras"):
+            st.session_state.tbl_restricciones_ancho=ras_ed; st.rerun()
 
     with rt3:
         rc_ed=st.data_editor(get_tbl("tbl_restricciones_color",empty_rc),num_rows="dynamic",
-                             use_container_width=True,key="editor_rc",
+                             use_container_width=True,key=f"editor_rc_{st.session_state.get("tbl_version",0)}",
                              column_config={
                                  "COLOR_R":st.column_config.TextColumn("COLOR_R",width="medium"),
                                  "PRIORIDAD_1":st.column_config.NumberColumn("Prioridad 1 (LBS)",format="%d"),
                                  "PRIORIDAD_2":st.column_config.NumberColumn("Prioridad 2 (LBS)",format="%d"),
                                  "PRIORIDAD_3":st.column_config.NumberColumn("Prioridad 3 (LBS)",format="%d"),
                              })
-        if st.button("💾 Guardar",key="save_rc"): st.session_state.tbl_restricciones_color=rc_ed; st.success("Guardado")
+        if st.button("💾 Guardar",key="save_rc"):
+            st.session_state.tbl_restricciones_color=rc_ed; st.rerun()
 
     with rt4:
         rf_ed=st.data_editor(get_tbl("tbl_restricciones_familia",empty_rf),num_rows="dynamic",
-                             use_container_width=True,key="editor_rf",
+                             use_container_width=True,key=f"editor_rf_{st.session_state.get("tbl_version",0)}",
                              column_config={
                                  "FAMILIA":st.column_config.TextColumn("FAMILIA",width="medium"),
                                  "PRIORIDAD_1":st.column_config.NumberColumn("Prioridad 1 (LBS)",format="%d"),
@@ -575,19 +589,21 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
                                  "PRIORIDAD_3":st.column_config.NumberColumn("Prioridad 3 (LBS)",format="%d"),
                                  "PRIORIDAD_4":st.column_config.NumberColumn("Prioridad 4 (LBS)",format="%d"),
                              })
-        if st.button("💾 Guardar",key="save_rf"): st.session_state.tbl_restricciones_familia=rf_ed; st.success("Guardado")
+        if st.button("💾 Guardar",key="save_rf"):
+            st.session_state.tbl_restricciones_familia=rf_ed; st.rerun()
 
     with rt5:
         st.markdown('<div class="info-note">Tabla vacía = NO se mezclan bloques de prioridad. '
                     'Agrega pares que SÍ pueden coexistir.</div>',unsafe_allow_html=True)
         BLOQUES=["VENCIDOS","AHEAD","AHEAD2","OTROS"]
         comb_ed=st.data_editor(get_tbl("tbl_combinaciones",empty_comb),num_rows="dynamic",
-                               use_container_width=True,key="editor_comb",
+                               use_container_width=True,key=f"editor_comb_{st.session_state.get("tbl_version",0)}",
                                column_config={
                                    "PRIORIDAD_1":st.column_config.SelectboxColumn("Bloque 1",options=BLOQUES),
                                    "PRIORIDAD_2":st.column_config.SelectboxColumn("Bloque 2",options=BLOQUES),
                                })
-        if st.button("💾 Guardar",key="save_comb"): st.session_state.tbl_combinaciones=comb_ed; st.success("Guardado")
+        if st.button("💾 Guardar",key="save_comb"):
+            st.session_state.tbl_combinaciones=comb_ed; st.rerun()
 
 # ── Sección 5: Perfiles ────────────────────────────────────────────────────
 with st.expander("💾  Sección 5 — Guardar Perfil", expanded=False):
