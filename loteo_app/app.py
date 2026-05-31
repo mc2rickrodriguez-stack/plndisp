@@ -527,36 +527,12 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
                 else:
                     st.caption(f"⚠️ {mix_v}: {fmt(lbs_disp)} LBS disponibles | {fmt(lbs_cap)} LBS capacidad → {fmt(-gap)} LBS sin capacidad")
 
-# ── Sección 3: Calidad ────────────────────────────────────────────────────
-with st.expander("🎯  Sección 3 — Calidad del Loteo", expanded=True):
-    p=st.session_state.params or {}
-    cfg=st.session_state.cfg or {}
-    def cv(k,d): return cfg.get(k,p.get(k,d))
 
-    ql_col,info_col=st.columns([2,1])
-    with ql_col:
-        quality_level=st.slider(
-            "Calidad del loteo",min_value=1,max_value=10,
-            value=int(cv("QUALITY_LEVEL",5)),
-            key="quality_slider",
-            help="1 = Muy rápido (menos exhaustivo) · 10 = Óptimo (más lento)",
-        )
-        # Always persist to session_state so it's available even when collapsed
-        st.session_state["_quality_level"]=quality_level
-        beam=quality_to_beam(quality_level)
-        st.caption(f"BEAM_WIDTH interno: **{beam}** · "
-                   f"{'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Lento/Óptimo'}")
-    with info_col:
-        if st.session_state.df_data is not None:
-            df_data=st.session_state.df_data
-            groups_est=df_data.groupby(["TELA.CUERPO","MIX"]).ngroups
-            est_sec=groups_est*beam*0.075
-            st.metric("Grupos estimados",f"{groups_est:,}")
-            st.caption(f"⏱ Tiempo estimado: ~{est_sec/60:.1f} min")
-
-# Read quality from session_state (safe even if expander was collapsed)
+# _ql ya viene del sidebar (quality_slider en sidebar)
 _ql=st.session_state.get("_quality_level", int((st.session_state.cfg or {}).get("QUALITY_LEVEL",5)))
 section3_overrides={"QUALITY_LEVEL":_ql}
+
+# ── Sección 3 (anteriormente aquí, movida al sidebar) ─────────────────────
 
 # ── Sección 4: Reglas ──────────────────────────────────────────────────────
 with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", expanded=False):
