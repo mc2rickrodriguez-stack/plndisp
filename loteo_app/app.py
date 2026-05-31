@@ -389,7 +389,15 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
 
     if uploaded:
         fb=uploaded.read()
-        if fb!=st.session_state.raw_file_bytes:
+        # Usamos el hash del archivo subido manualmente para detectar cambios reales.
+        # raw_file_bytes puede venir de un perfil (distinto al archivo en el uploader),
+        # así que comparamos contra el último archivo que el uploader procesó.
+        _last_upload_key = f"_last_upload_{uploaded.name}_{uploaded.size}"
+        _already_processed = st.session_state.get(_last_upload_key, False)
+
+        if not _already_processed:
+            # Archivo nuevo en el uploader — cargarlo y resetear tablas
+            st.session_state[_last_upload_key] = True
             with st.spinner("Leyendo…"):
                 try:
                     df_data,df_cap,params,hdr=load_inputs(io.BytesIO(fb))
@@ -398,6 +406,8 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
                     st.session_state.raw_file_name=uploaded.name
                     load_tables_from_excel(fb); st.rerun()
                 except Exception as e: st.error(str(e))
+        # Si ya procesamos este archivo antes, no hacemos nada.
+        # Esto preserva los datos de un perfil aunque el uploader siga mostrando el archivo.
 
     if st.session_state.df_data is not None:
         with st.expander("🔍 Vista previa DATA"):
