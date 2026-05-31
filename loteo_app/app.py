@@ -300,6 +300,12 @@ with st.sidebar:
                                     min_value=0.0,max_value=50.0,step=0.5)
         tol_thr    =st.number_input("Umbral pequeña/grande (LBS)",
                                     value=float(cv("OVERSHOOT_SMALL_THRESHOLD",5000)),step=500.0)
+        st.divider()
+        lookahead  =st.checkbox("LOOKAHEAD_VENCIDOS",
+                                value=bool(int(cv("LOOKAHEAD_VENCIDOS",1))),
+                                help="Antes de confirmar un lote que contiene VENCIDOS, verifica que "
+                                     "las LBS vencidas restantes en el grupo puedan formar al menos "
+                                     "otro lote válido. Evita dejar VENCIDOS huérfanos.")
 
     with st.expander("Agrupamiento"):
         agrupar_tono=st.checkbox("Agrupar por TONO",
@@ -316,6 +322,7 @@ with st.sidebar:
         "OVERSHOOT_ENABLE":int(overshoot),"UNDERSHOOT_ENABLE":int(undershoot),
         "OVERSHOOT_TOL_PCT_SMALL":tol_small/100,"OVERSHOOT_TOL_PCT_LARGE":tol_large/100,
         "OVERSHOOT_SMALL_THRESHOLD":tol_thr,
+        "LOOKAHEAD_VENCIDOS":int(lookahead),
         "AGRUPAR_POR_TONO":int(agrupar_tono),"APPLY_RULES_BLEACH":int(apply_bleach),
         "RULE_ORDER":rule_order,"PRIORITY_ORDER":priority_order,
     }
@@ -735,7 +742,29 @@ if run_btn and can_run:
 # ── Resultados ─────────────────────────────────────────────────────────────
 if st.session_state.last_result is None: st.stop()
 
-res=st.session_state.last_result
+st.divider()
+st.markdown("### 📊 Resultados")
+
+# ── Selector de corrida ────────────────────────────────────────────────────
+_hist = st.session_state.run_history
+if len(_hist) > 1:
+    _opts = []
+    for i, r in enumerate(_hist):
+        _t = r.get("tiempo_seg",0); _rm,_rs = divmod(int(_t),60)
+        _lbl = (f"#{i+1} · {r['label']} · Calidad {r.get('quality_used','?')} · "
+                f"{_rm:02d}:{_rs:02d}"
+                + (f" · 💬 {r['comentario']}" if r.get("comentario") else ""))
+        _opts.append(_lbl)
+    _sel_idx = st.selectbox(
+        "Ver corrida", range(len(_opts)),
+        format_func=lambda i: _opts[i],
+        index=len(_hist)-1,   # última por default
+        key="corrida_sel"
+    )
+    res = _hist[_sel_idx]
+else:
+    res = st.session_state.last_result
+
 df_det=res["detalle"]; df_res=res["resumen"]
 df_exc=res["excedentes"]; reports=res["reports"]
 lnk_df=reports.get("LNK_COMPLETITUD",pd.DataFrame())
@@ -743,8 +772,6 @@ lnk_df=reports.get("LNK_COMPLETITUD",pd.DataFrame())
 if res.get("cancelled"):
     st.warning("⚠️ Corrida cancelada — resultados parciales")
 
-st.divider()
-st.markdown("### 📊 Resultados")
 _comment=res.get("comentario","")
 _ql_used=res.get("quality_used","?")
 _t_seg=res.get("tiempo_seg",0)

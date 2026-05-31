@@ -322,6 +322,61 @@ def get_allowed_ranges(rango_target, all_ranges_mix, params):
         if ni<len(sorted_r): allowed.append(sorted_r[ni])
     return allowed
 
+# ── Look-ahead para VENCIDOS ──────────────────────────────────────────────
+def _lookahead_vencidos_ok(work, lote_rows, ranges_mix, capacity_used_snap, params, width_cache):
+    """
+    Después de tentativamente formar un lote que contiene al menos un VENCIDO,
+    verifica que las LBS vencidas que NO entraron al lote puedan formar
+    al menos otro lote válido (llegando al mínimo del rango más pequeño con capacidad).
+
+    Opción B: aplica cuando el lote contiene VENCIDOS, sin importar si el seed
+    es VENCIDO o AHEAD (cubre lotes mixtos).
+
+    Retorna True si el look-ahead pasa (el lote es seguro confirmar).
+    Retorna False si confirmar este lote dejaría VENCIDOS huérfanos.
+    """
+    # ¿El lote propuesto contiene algún VENCIDO?
+    lote_indices = {idx for idx, *_ in lote_rows}
+    lote_has_vencido = any(
+        work.at[idx, "BLOQUE"] == "VENCIDOS" for idx in lote_indices
+        if idx in work.index
+    )
+    if not lote_has_vencido:
+        return True  # no aplica, dejar pasar
+
+    # Calcular LBS vencidas que quedarían FUERA del lote
+    lbs_asig_por_idx = {idx: lbs for idx, lbs, *_ in lote_rows}
+    lbs_vencidos_restantes = 0.0
+    for idx in work.index:
+        if work.at[idx, "BLOQUE"] != "VENCIDOS":
+            continue
+        lbs_rest = float(work.at[idx, "LBS_RESTANTES"])
+        if lbs_rest <= 0:
+            continue
+        asig = lbs_asig_por_idx.get(idx, 0.0)
+        sobra = max(0.0, lbs_rest - asig)
+        lbs_vencidos_restantes += sobra
+
+    # Si no quedan LBS vencidas fuera del lote, look-ahead pasa trivialmente
+    if lbs_vencidos_restantes <= 1e-6:
+        return True
+
+    # Mínimo del rango más pequeño con capacidad disponible
+    min_rango = None
+    for r in sorted(ranges_mix, key=lambda x: float(x["MINIMO"])):
+        rid = r["RANGO_ID"]
+        cap_left = float(r["CAPACIDAD"]) - float(capacity_used_snap.get(rid, 0.0))
+        if cap_left > 1e-6:
+            min_rango = float(r["MINIMO"])
+            break
+
+    if min_rango is None:
+        return True  # sin capacidad disponible de todos modos, no bloqueamos
+
+    # ¿Las LBS vencidas restantes alcanzan el mínimo?
+    return lbs_vencidos_restantes >= min_rango - 1e-6
+
+
 # ── Main run_loteo ────────────────────────────────────────────────────────────
 def run_loteo(df_data, df_cap, params,
               progress_callback=None, cancel_flag=None):
@@ -439,6 +494,16 @@ def run_loteo(df_data, df_cap, params,
                                 if intento:
                                     lote=intento; break
                             if lote: break
+
+                    if lote is not None:
+                        # ── Look-ahead VENCIDOS ────────────────────────────
+                        if int(params.get("LOOKAHEAD_VENCIDOS", 1)) == 1:
+                            la_ok = _lookahead_vencidos_ok(
+                                work, lote["ROWS"], ranges_mix,
+                                capacity_used, params, width_cache)
+                            if not la_ok:
+                                # Este lote dejaría VENCIDOS huérfanos — descartarlo
+                                lote = None
 
                     if lote is not None:
                         wset=set(lote["FINAL_WIDTHS"])
@@ -605,6 +670,7 @@ def run_loteo(df_data, df_cap, params,
 
     df_par=pd.DataFrame([
         ["QUALITY_LEVEL",quality_level],["BEAM_WIDTH",beam_w],
+        ["LOOKAHEAD_VENCIDOS",params.get("LOOKAHEAD_VENCIDOS",1)],
         ["RULE_ORDER",params.get("RULE_ORDER","")],
         ["PRIORITY_ORDER",params.get("PRIORITY_ORDER","")],
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
