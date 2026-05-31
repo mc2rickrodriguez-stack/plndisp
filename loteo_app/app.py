@@ -98,9 +98,36 @@ def get_tbl(key, factory):
 
 # ── Profile helpers ────────────────────────────────────────────────────────
 def df2j(df): return [] if (df is None or df.empty) else df.where(pd.notna(df),None).to_dict("records")
-def j2df(r,f):
-    df= pd.DataFrame(r) if r else f()
-    if f==empty_cap: df=_fix_bool_cols(df)
+def _fix_numeric_cols(df, cols):
+    """Convierte columnas a float — reemplaza None/NaN con pd.NA para NumberColumn."""
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+# Columnas numéricas por tipo de tabla
+_NUM_COLS = {
+    "ra":   ["ANCHO_1","ANCHO_2","CAPACIDAD_PRIORIDAD_1","CAPACIDAD_PRIORIDAD_2","CAPACIDAD_PRIORIDAD_3"],
+    "ras":  ["LIMITE_ANCHO","PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"],
+    "rc":   ["PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3"],
+    "rf":   ["PRIORIDAD_1","PRIORIDAD_2","PRIORIDAD_3","PRIORIDAD_4"],
+    "cap":  ["MINIMO","MAXIMO","CAPACIDAD","MIN_DIFF","MAX_DIFF","MAX_WIDTHS","MAX_SKU",
+             "MAX_SALTO_RANGO","SPLIT_MIN_LBS","OVERSHOOT_TOL_PCT","UNDERSHOOT_TOL_PCT"],
+}
+
+def j2df(r, f):
+    df = pd.DataFrame(r) if r else f()
+    if f == empty_cap:
+        df = _fix_bool_cols(df)
+        df = _fix_numeric_cols(df, _NUM_COLS["cap"])
+    elif f == empty_ra:
+        df = _fix_numeric_cols(df, _NUM_COLS["ra"])
+    elif f == empty_ras:
+        df = _fix_numeric_cols(df, _NUM_COLS["ras"])
+    elif f == empty_rc:
+        df = _fix_numeric_cols(df, _NUM_COLS["rc"])
+    elif f == empty_rf:
+        df = _fix_numeric_cols(df, _NUM_COLS["rf"])
     return df
 
 def build_profile(overrides):
@@ -146,6 +173,11 @@ def load_tables_from_excel(raw):
         if sheet in xls.sheet_names:
             df = pd.read_excel(io.BytesIO(raw), sheet_name=sheet, engine="openpyxl")
             df.columns = [str(c).strip() for c in df.columns]
+            # Enforce correct dtypes to avoid NumberColumn type errors
+            if factory == empty_ra:  df = _fix_numeric_cols(df, _NUM_COLS["ra"])
+            elif factory == empty_ras: df = _fix_numeric_cols(df, _NUM_COLS["ras"])
+            elif factory == empty_rc:  df = _fix_numeric_cols(df, _NUM_COLS["rc"])
+            elif factory == empty_rf:  df = _fix_numeric_cols(df, _NUM_COLS["rf"])
             return df
         return factory()
 
