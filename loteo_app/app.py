@@ -41,7 +41,9 @@ for k,v in {
 
 def _bump(): st.session_state["tbl_version"] += 1
 
-def fmt(v): return f"{v:,.0f}"
+def fmt(v):
+    try: return f"{int(round(float(v))):,}"
+    except: return "0"
 
 # ── Table factories ────────────────────────────────────────────────────────
 CAP_COLS=["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX",
@@ -306,6 +308,54 @@ with st.sidebar:
         "RULE_ORDER":rule_order,"PRIORITY_ORDER":priority_order,
     }
 
+    st.divider()
+    # ── Calidad del Loteo ──────────────────────────────────────────────────
+    st.subheader("🎯 Calidad del Loteo")
+    _p_ql  = st.session_state.params or {}
+    _cfg_ql= st.session_state.cfg or {}
+    _cv_ql = lambda k,d: _cfg_ql.get(k, _p_ql.get(k,d))
+    quality_level = st.slider(
+        "Nivel de calidad", min_value=1, max_value=10,
+        value=int(_cv_ql("QUALITY_LEVEL", 5)),
+        key="quality_slider",
+        help="1 = Muy rápido · 10 = Óptimo (más lento)",
+    )
+    st.session_state["_quality_level"] = quality_level
+    _beam_sb = quality_to_beam(quality_level)
+    st.caption(f"BEAM_WIDTH: **{_beam_sb}** · {'🟢 Rápido' if quality_level<=3 else '🟡 Balanceado' if quality_level<=6 else '🔴 Óptimo'}")
+    if st.session_state.df_data is not None:
+        _df_est = st.session_state.df_data
+        _grp_est = _df_est.groupby(["TELA.CUERPO","MIX"]).ngroups
+        _est_sec = _grp_est * _beam_sb * 0.075
+        st.caption(f"Grupos: {_grp_est:,} · Estimado: ~{_est_sec/60:.1f} min")
+
+    st.divider()
+    # ── Guardar Perfil ─────────────────────────────────────────────────────
+    st.subheader("💾 Guardar Perfil")
+    _all_ov_sb = {**adv_overrides, "QUALITY_LEVEL": quality_level}
+    _pname_sb  = st.text_input("Nombre", placeholder="ej. Semana23_DYE", key="pname")
+    _notes_sb  = st.text_input("Notas",  placeholder="Descripción",       key="pnotes")
+    if st.button("💾 Guardar en sesión", use_container_width=True, key="btn_guardar_perfil"):
+        _nm = _pname_sb.strip()
+        if _nm:
+            _pr = build_profile(_all_ov_sb); _pr["notes"] = _notes_sb
+            if _nm in profiles:
+                _old_p = profiles[_nm].get("overrides",{})
+                _diff  = {k:{"antes":_old_p.get(k),"ahora":_all_ov_sb.get(k)}
+                          for k in set(_old_p)|set(_all_ov_sb)
+                          if _old_p.get(k) != _all_ov_sb.get(k)}
+                _pr["diff_vs_anterior"] = _diff
+            profiles[_nm] = _pr
+            st.session_state.profiles = profiles
+            st.success(f"'{_nm}' guardado")
+        else:
+            st.warning("Ingresa un nombre")
+    _pr_json_sb = json.dumps(build_profile(_all_ov_sb), indent=2, ensure_ascii=False)
+    st.download_button("📤 Exportar JSON", data=_pr_json_sb,
+                       file_name=(_pname_sb.strip() or "perfil")+".json",
+                       mime="application/json", use_container_width=True,
+                       key="btn_export_json")
+
 # ══════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════
@@ -397,7 +447,7 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
                 unsafe_allow_html=True)
 
     tbl_cap=get_tbl("tbl_capacidades",empty_cap)
-    h=min(60+35*max(len(tbl_cap),1),500)
+    h=max(415, min(60+35*max(len(tbl_cap),1),600))  # min 10 rows
 
     # CSS to freeze first 3 columns in data_editor
     st.markdown("""
@@ -580,31 +630,7 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
                                })
         if st.button("💾 Guardar",key="save_comb"): st.session_state.tbl_combinaciones=comb_ed; st.rerun()
 
-# ── Sección 5: Perfiles ────────────────────────────────────────────────────
-with st.expander("💾  Sección 5 — Guardar Perfil", expanded=False):
-    all_overrides={**adv_overrides,**section3_overrides}
-    pc1,pc2,pc3,pc4=st.columns([2,1,1,1])
-    pname=pc1.text_input("Nombre del perfil",placeholder="ej. Semana23_DYE",key="pname")
-    notes=pc2.text_input("Notas",placeholder="Descripción opcional",key="pnotes")
-    with pc3:
-        if st.button("💾 En sesión",use_container_width=True):
-            nm=pname.strip()
-            if nm:
-                pr=build_profile(all_overrides); pr["notes"]=notes
-                # diff vs previous version of same profile
-                if nm in profiles:
-                    old=profiles[nm].get("overrides",{}); new=all_overrides
-                    diff={k:{"antes":old.get(k),"ahora":new.get(k)} for k in set(old)|set(new) if old.get(k)!=new.get(k)}
-                    pr["diff_vs_anterior"]=diff
-                profiles[nm]=pr; st.session_state.profiles=profiles; st.success(f"'{nm}' guardado")
-            else: st.warning("Ingresa un nombre")
-    with pc4:
-        pr_json=json.dumps(build_profile(all_overrides),indent=2,ensure_ascii=False)
-        st.download_button("📤 Exportar JSON",data=pr_json,
-                           file_name=(pname.strip() or "perfil")+".json",
-                           mime="application/json",use_container_width=True)
-    if profiles:
-        st.caption(f"Perfiles en sesión: {', '.join(profiles.keys())}")
+# (Perfil guardado desde el sidebar)
 
 # ── Botón principal ────────────────────────────────────────────────────────
 st.divider()
@@ -634,11 +660,15 @@ if run_btn and can_run:
     st.session_state.cancel_flag=[False]
     st.session_state.running=True
     all_overrides={**adv_overrides,**section3_overrides}
+    _run_start = datetime.now()
 
     with st.spinner("Preparando parámetros…"):
         try:
             df_data2,df_cap2,params2,_=load_inputs(io.BytesIO(st.session_state.raw_file_bytes),
                                                     param_overrides=all_overrides)
+            params2["QUALITY_LEVEL"] = int(all_overrides.get("QUALITY_LEVEL", 5))
+            params2["BEAM_WIDTH"]    = quality_to_beam(params2["QUALITY_LEVEL"])
+
             cap_ui=get_tbl("tbl_capacidades",empty_cap)
             if not cap_ui.empty:
                 for c in ["MINIMO","MAXIMO","CAPACIDAD"]:
@@ -651,29 +681,33 @@ if run_btn and can_run:
     prog=st.progress(0,text="Iniciando…")
     stat=st.empty()
 
-    # Pre-compute total LBS planeadas for % display
     _lbs_plan_total = float(df_data2["TOTAL"].sum()) if not df_data2.empty else 0.0
 
     def cb(pct,msg,stats):
         prog.progress(min(pct,0.99),text=msg)
         lbs_asig  = float(stats.get('lbs', 0))
         pct_asig  = (lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0.0
+        _elapsed  = (datetime.now() - _run_start).seconds
+        _mins, _secs = divmod(_elapsed, 60)
         stat.markdown(
             f"**Grupo** {stats['grupo']}/{stats['total']} · "
             f"**Lotes:** {stats['lotes']:,} · "
             f"**LBS Plan:** {fmt(_lbs_plan_total)} · "
             f"**LBS Asignadas:** {fmt(lbs_asig)} · "
-            f"**% Asignado:** {pct_asig:.1f}%"
+            f"**% Asignado:** {pct_asig:.1f}% · "
+            f"**Tiempo:** {_mins:02d}:{_secs:02d}"
         )
 
     try:
         df_det,df_res,df_exc,df_par,cancelled=run_loteo(
             df_data2,df_cap2,params2,progress_callback=cb,
             cancel_flag=st.session_state.cancel_flag)
+        _elapsed_total = (datetime.now() - _run_start).seconds
+        _tm, _ts = divmod(_elapsed_total, 60)
         if cancelled:
-            prog.progress(1.0,text="⏹ Cancelado — resultados parciales disponibles")
+            prog.progress(1.0,text=f"⏹ Cancelado — resultados parciales ({_tm:02d}:{_ts:02d})")
         else:
-            prog.progress(1.0,text="✅ Loteo completado")
+            prog.progress(1.0,text=f"✅ Loteo completado en {_tm:02d}:{_ts:02d}")
         stat.empty()
     except Exception as e:
         st.error(f"Error en loteo: {e}"); st.session_state.running=False; st.stop()
@@ -682,6 +716,7 @@ if run_btn and can_run:
             "label":datetime.now().strftime("%H:%M:%S"),
             "comentario":st.session_state.get("run_comment",""),
             "quality_used":_ql,
+            "tiempo_seg": (datetime.now()-_run_start).seconds,
             "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
             "params_out":df_par,
             "reports":build_reports(df_data2,df_cap2,df_det,df_res),
@@ -708,7 +743,9 @@ st.divider()
 st.markdown("### 📊 Resultados")
 _comment=res.get("comentario","")
 _ql_used=res.get("quality_used","?")
-st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  {'·  💬 '+_comment if _comment else ''}")
+_t_seg=res.get("tiempo_seg",0)
+_tm,_ts=divmod(int(_t_seg),60)
+st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  ·  Tiempo: {_tm:02d}:{_ts:02d}  {'·  💬 '+_comment if _comment else ''}")
 
 k1,k2,k3,k4,k5,k6,k7=st.columns(7)
 _lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
@@ -731,12 +768,104 @@ tab_g,tab_d,tab_r,tab_l,tab_c,tab_e=st.tabs([
 with tab_g:
     cap_df  = reports.get("CAPACIDAD_X_CATEG", pd.DataFrame())
     prio_df = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
+
+    # ── Gráficas existentes ────────────────────────────────────────────────
     c1,c2=st.columns(2)
     with c1: st.plotly_chart(chart_capacidad_barras(cap_df), use_container_width=True)
     with c2: st.plotly_chart(chart_bloques_donut(prio_df),   use_container_width=True)
     c3,c4=st.columns(2)
     with c3: st.plotly_chart(chart_heatmap_capacidad(cap_df),  use_container_width=True)
     with c4: st.plotly_chart(chart_completitud_lnk(lnk_df),    use_container_width=True)
+
+    st.divider()
+
+    # ── Donuts: Anchos y LNKs ──────────────────────────────────────────────
+    st.markdown("#### 🍩 Distribución de Lotes")
+
+    if df_res.empty:
+        st.info("Sin datos de lotes.")
+    else:
+        # Shared filters
+        _f1,_f2,_f3 = st.columns(3)
+        _mix_opts  = ["Todos"] + sorted(df_res["MIX"].unique().tolist())
+        _cat_opts  = ["Todas"] + sorted(df_res["CATEGORIA"].dropna().unique().tolist())
+        _blq_opts  = ["Todos"] + sorted(df_res["BLOQUE_DOMINANTE"].dropna().unique().tolist()) if "BLOQUE_DOMINANTE" in df_res.columns else ["Todos"]
+        _f_mix  = _f1.selectbox("MIX",   _mix_opts, key="dg_mix")
+        _f_cat  = _f2.selectbox("Categoría", _cat_opts, key="dg_cat")
+        _f_blq  = _f3.selectbox("Bloque", _blq_opts, key="dg_blq")
+
+        _df_f = df_res.copy()
+        if _f_mix  != "Todos":  _df_f = _df_f[_df_f["MIX"]==_f_mix]
+        if _f_cat  != "Todas":  _df_f = _df_f[_df_f["CATEGORIA"]==_f_cat]
+        if _f_blq  != "Todos" and "BLOQUE_DOMINANTE" in _df_f.columns:
+            _df_f = _df_f[_df_f["BLOQUE_DOMINANTE"]==_f_blq]
+
+        d_left, d_right = st.columns(2)
+
+        # ── Donut 1: Por N° de Anchos ──────────────────────────────────────
+        with d_left:
+            st.markdown("**Por cantidad de anchos**")
+            if _df_f.empty:
+                st.info("Sin datos.")
+            else:
+                import plotly.graph_objects as go
+                _anc = (_df_f.groupby("ANCHOS_UNICOS")
+                        .agg(Lotes=("LOTE_ID","nunique"), LBS=("LBS_TOTAL","sum"))
+                        .reset_index().sort_values("ANCHOS_UNICOS"))
+                _colors = ["#9FE1CB","#1D9E75","#0F6E56","#04342C","#B5D4F4","#378ADD"]
+                _fig1 = go.Figure(go.Pie(
+                    labels=[f"{int(r.ANCHOS_UNICOS)} ancho{'s' if r.ANCHOS_UNICOS>1 else ''}" for _,r in _anc.iterrows()],
+                    values=_anc["Lotes"],
+                    hole=0.55,
+                    marker_colors=_colors[:len(_anc)],
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
+                ))
+                _fig1.update_layout(height=320, margin=dict(t=20,b=10,l=10,r=10), showlegend=False)
+                st.plotly_chart(_fig1, use_container_width=True)
+                # Tabla resumen
+                _anc_disp = _anc.copy()
+                _anc_disp["ANCHOS_UNICOS"] = _anc_disp["ANCHOS_UNICOS"].astype(int)
+                _anc_disp["% Lotes"] = (_anc_disp["Lotes"]/_anc_disp["Lotes"].sum()*100).round(1)
+                _anc_disp["LBS"] = _anc_disp["LBS"].apply(fmt)
+                _anc_disp = _anc_disp.rename(columns={"ANCHOS_UNICOS":"N° Anchos"})
+                st.dataframe(_anc_disp[["N° Anchos","Lotes","% Lotes","LBS"]], use_container_width=True, hide_index=True)
+
+        # ── Donut 2: Por N° de LNKs por lote ──────────────────────────────
+        with d_right:
+            st.markdown("**Por cantidad de LNKs por lote**")
+            if _df_f.empty or "SKU_DISTINTOS" not in _df_f.columns:
+                st.info("Sin datos.")
+            else:
+                # Bin LNKs: 1, 2, 3, 4, 5+
+                def _bin_lnk(n):
+                    n=int(n)
+                    if n<=4: return f"{n} LNK{'s' if n>1 else ''}"
+                    return "5+ LNKs"
+                _df_f2 = _df_f.copy()
+                _df_f2["_BIN"] = _df_f2["SKU_DISTINTOS"].apply(_bin_lnk)
+                _lnk = (_df_f2.groupby("_BIN")
+                        .agg(Lotes=("LOTE_ID","nunique"), LBS=("LBS_TOTAL","sum"))
+                        .reset_index())
+                _order = ["1 LNK","2 LNKs","3 LNKs","4 LNKs","5+ LNKs"]
+                _lnk["_ord"] = _lnk["_BIN"].apply(lambda x: _order.index(x) if x in _order else 99)
+                _lnk = _lnk.sort_values("_ord").drop(columns=["_ord"])
+                _colors2 = ["#B5D4F4","#378ADD","#185FA5","#0C447C","#042C53"]
+                _fig2 = go.Figure(go.Pie(
+                    labels=_lnk["_BIN"],
+                    values=_lnk["Lotes"],
+                    hole=0.55,
+                    marker_colors=_colors2[:len(_lnk)],
+                    textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
+                ))
+                _fig2.update_layout(height=320, margin=dict(t=20,b=10,l=10,r=10), showlegend=False)
+                st.plotly_chart(_fig2, use_container_width=True)
+                _lnk_disp = _lnk.copy()
+                _lnk_disp["% Lotes"] = (_lnk_disp["Lotes"]/_lnk_disp["Lotes"].sum()*100).round(1)
+                _lnk_disp["LBS"] = _lnk_disp["LBS"].apply(fmt)
+                _lnk_disp = _lnk_disp.rename(columns={"_BIN":"LNKs por lote"})
+                st.dataframe(_lnk_disp[["LNKs por lote","Lotes","% Lotes","LBS"]], use_container_width=True, hide_index=True)
 
     st.divider()
     st.markdown("#### 📋 Tablas Resumen")
@@ -885,8 +1014,10 @@ with tab_c:
         for i,r in enumerate(hist):
             d=r["detalle"]; s=r["resumen"]; exc=r["excedentes"]
             lc=r["reports"].get("LNK_COMPLETITUD",pd.DataFrame())
+            _t=r.get("tiempo_seg",0); _rm,_rs=divmod(int(_t),60)
             rows.append({
                 "#":i+1, "Hora":r["label"],
+                "Tiempo":f"{_rm:02d}:{_rs:02d}",
                 "Calidad":r.get("quality_used","?"),
                 "Comentario":r.get("comentario","—"),
                 "Lotes":len(s),
