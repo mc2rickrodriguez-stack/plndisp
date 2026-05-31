@@ -1,5 +1,5 @@
 """NV2 Loteo Tintorería v4"""
-import io, sys, os, json, base64, threading
+import io, sys, os, json, threading
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -36,6 +36,8 @@ for k,v in {
     # Los data_editors usan este número en su key → Streamlit los recrea desde
     # cero con los datos nuevos, en lugar de conservar su caché interna.
     "tbl_version": 0,
+    # Hash del último archivo procesado por el file_uploader (independiente de perfiles)
+    "_uploader_last_hash": None,
 }.items():
     if k not in st.session_state: st.session_state[k]=v
 
@@ -102,6 +104,7 @@ def j2df(r,f):
     return df
 
 def build_profile(overrides):
+    """Guarda SOLO configuración — nunca el archivo de datos."""
     p={"overrides":overrides,"created":datetime.now().isoformat(),"notes":"",
        "tables":{
            "capacidades":          df2j(get_tbl("tbl_capacidades",empty_cap)),
@@ -111,12 +114,10 @@ def build_profile(overrides):
            "restricciones_familia":df2j(get_tbl("tbl_restricciones_familia",empty_rf)),
            "combinaciones":        df2j(get_tbl("tbl_combinaciones",empty_comb)),
        }}
-    if st.session_state.raw_file_bytes:
-        p["file_b64"] =base64.b64encode(st.session_state.raw_file_bytes).decode()
-        p["file_name"]=st.session_state.raw_file_name or "archivo.xlsx"
     return p
 
 def apply_profile(profile):
+    """Carga SOLO configuración — no toca el archivo de datos cargado."""
     t=profile.get("tables",{})
     st.session_state.tbl_capacidades          =j2df(t.get("capacidades"),empty_cap)
     st.session_state.tbl_reglas_anchos        =j2df(t.get("reglas_anchos"),empty_ra)
@@ -127,15 +128,6 @@ def apply_profile(profile):
     st.session_state.cfg=profile.get("overrides",{})
     st.session_state.cap_applied=False
     _bump()   # fuerza recreación de todos los data_editors
-    if "file_b64" in profile:
-        raw=base64.b64decode(profile["file_b64"])
-        st.session_state.raw_file_bytes=raw
-        st.session_state.raw_file_name=profile.get("file_name","archivo.xlsx")
-        try:
-            df_data,df_cap,params,_=load_inputs(io.BytesIO(raw))
-            st.session_state.df_data=df_data; st.session_state.df_cap=df_cap
-            st.session_state.params=params
-        except: pass
 
 CAP_DEFAULTS = {
     "MIN_DIFF": 0.0, "MAX_DIFF": 999.0, "MAX_WIDTHS": 3,
@@ -395,16 +387,16 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
         else: st.info("Sin archivo")
 
     if uploaded:
-        fb=uploaded.read()
-        # Usamos el hash del archivo subido manualmente para detectar cambios reales.
-        # raw_file_bytes puede venir de un perfil (distinto al archivo en el uploader),
-        # así que comparamos contra el último archivo que el uploader procesó.
-        _last_upload_key = f"_last_upload_{uploaded.name}_{uploaded.size}"
-        _already_processed = st.session_state.get(_last_upload_key, False)
+        import hashlib
+        fb = uploaded.read()
+        # Identificamos el archivo por hash MD5 del contenido.
+        # Recargamos SIEMPRE que el contenido cambie, sin importar nombre ni tamaño.
+        # No usamos raw_file_bytes para comparar porque ese puede venir de un perfil.
+        _content_hash = hashlib.md5(fb).hexdigest()
+        _uploader_hash = st.session_state.get("_uploader_last_hash", None)
 
-        if not _already_processed:
-            # Archivo nuevo en el uploader — cargarlo y resetear tablas
-            st.session_state[_last_upload_key] = True
+        if _content_hash != _uploader_hash:
+            st.session_state["_uploader_last_hash"] = _content_hash
             with st.spinner("Leyendo…"):
                 try:
                     df_data,df_cap,params,hdr=load_inputs(io.BytesIO(fb))
@@ -413,8 +405,6 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
                     st.session_state.raw_file_name=uploaded.name
                     load_tables_from_excel(fb); st.rerun()
                 except Exception as e: st.error(str(e))
-        # Si ya procesamos este archivo antes, no hacemos nada.
-        # Esto preserva los datos de un perfil aunque el uploader siga mostrando el archivo.
 
     if st.session_state.df_data is not None:
         with st.expander("🔍 Vista previa DATA"):
