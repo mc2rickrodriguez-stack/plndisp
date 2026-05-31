@@ -86,11 +86,12 @@ def empty_comb(): return pd.DataFrame(columns=["PRIORIDAD_1","PRIORIDAD_2"])
 
 def get_tbl(key, factory):
     t = st.session_state[key]
-    df = t if t is not None else factory()
+    if t is None:
+        df = factory()
+    else:
+        df = t.copy()   # always work on a copy, never mutate session_state in-place
     if factory == empty_cap:
         df = _fix_bool_cols(df)
-        # Save back so future calls don't re-process
-        st.session_state[key] = df
     return df
 
 # ── Profile helpers ────────────────────────────────────────────────────────
@@ -257,18 +258,29 @@ with st.sidebar:
     # Profiles
     st.subheader("💾 Perfiles")
     profiles=st.session_state.profiles
+
+    # Importar JSON PRIMERO para que el perfil quede disponible
+    # en el selectbox de la misma ejecución
+    json_up=st.file_uploader("Importar JSON",type=["json"],key="json_upload")
+    if json_up:
+        try:
+            loaded=json.load(json_up)
+            nm=json_up.name.replace(".json","")
+            if nm not in profiles:   # solo importar si es nuevo
+                profiles[nm]=loaded
+                st.session_state.profiles=profiles
+                st.rerun()           # rerun para que aparezca en el selector
+            else:
+                st.caption(f"'{nm}' ya existe en sesión.")
+        except Exception as e: st.error(str(e))
+
     pnames=list(profiles.keys())
     if pnames:
         sel=st.selectbox("Cargar perfil",["— seleccionar —"]+pnames,key="sel_profile")
         if sel!="— seleccionar —" and st.button("📥 Aplicar",use_container_width=True):
             apply_profile(profiles[sel]); st.rerun()
-    json_up=st.file_uploader("Importar JSON",type=["json"],key="json_upload")
-    if json_up:
-        try:
-            loaded=json.load(json_up); nm=json_up.name.replace(".json","")
-            profiles[nm]=loaded; st.session_state.profiles=profiles
-            st.success(f"'{nm}' importado")
-        except Exception as e: st.error(str(e))
+    else:
+        st.caption("Sin perfiles guardados. Importa un JSON o guarda uno desde los ajustes.")
 
     st.divider()
     p=st.session_state.params or {}
@@ -497,7 +509,13 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
     b_col,s_col=st.columns([1,3])
     with b_col:
         if st.button("✅ Aplicar cambios de capacidad",type="primary",use_container_width=True):
-            st.session_state.tbl_capacidades=cap_ed; st.session_state.cap_applied=True
+            # FIX: guardamos cap_ed (ediciones del usuario en pantalla)
+            # pero si hay un perfil recién cargado (tbl_version cambió),
+            # cap_ed ya contiene los datos del perfil correctamente.
+            # Guardamos siempre lo que el editor muestra.
+            st.session_state.tbl_capacidades = cap_ed
+            st.session_state.cap_applied = True
+            # NO bumpeamos version aquí — solo guardamos y confirmamos
             st.rerun()
     with s_col:
         if st.session_state.cap_applied:
