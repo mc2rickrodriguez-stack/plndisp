@@ -520,52 +520,71 @@ with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
                 unsafe_allow_html=True)
 
     tbl_cap=get_tbl("tbl_capacidades",empty_cap)
-    h=max(415, min(60+35*max(len(tbl_cap),1),600))  # min 10 rows
 
-    # CSS to freeze first 3 columns in data_editor
-    st.markdown("""
-    <style>
-    div[data-testid="stDataEditor"] table thead tr th:nth-child(-n+4),
-    div[data-testid="stDataEditor"] table tbody tr td:nth-child(-n+4) {
-        position: sticky !important;
-        left: 0;
-        background: #f8fafc;
-        z-index: 2;
-        border-right: 2px solid #cbd5e1;
+    # Toggle vista básica / avanzada
+    _vista_avanzada = st.checkbox("Mostrar parámetros avanzados por categoría",
+                                   value=False, key="cap_vista_avanzada")
+
+    # Columnas básicas siempre visibles
+    _basic_cols = ["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX"]
+    # Columnas avanzadas solo en vista avanzada
+    _adv_cols   = ["MIN_DIFF","MAX_DIFF","MAX_WIDTHS","MAX_SKU","WIDTHS_TARGET_ORDER",
+                   "OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR","MAX_SALTO_RANGO",
+                   "SCRAP_REMAINDER","APPLY_RULES_BLEACH","SPLIT_MIN_LBS",
+                   "OVERSHOOT_TOL_PCT","UNDERSHOOT_TOL_PCT"]
+    _show_cols  = _basic_cols + (_adv_cols if _vista_avanzada else [])
+    _tbl_show   = tbl_cap[[c for c in _show_cols if c in tbl_cap.columns]].copy()
+
+    # Height: 7 rows basic, 10 rows advanced
+    h = 310 if not _vista_avanzada else max(415, min(60+35*max(len(tbl_cap),1),600))
+
+    _col_cfg_basic = {
+        "CATEGORIA": st.column_config.TextColumn("Categoría", width="small"),
+        "MINIMO":    st.column_config.NumberColumn("Mín LBS",  format="%d"),
+        "MAXIMO":    st.column_config.NumberColumn("Máx LBS",  format="%d"),
+        "CAPACIDAD": st.column_config.NumberColumn("Capacidad Total", format="%d"),
+        "MIX":       st.column_config.SelectboxColumn("MIX", options=["DYE","BLEACH"]),
     }
-    div[data-testid="stDataEditor"] table thead tr th:nth-child(2),
-    div[data-testid="stDataEditor"] table tbody tr td:nth-child(2) { left: 60px !important; }
-    div[data-testid="stDataEditor"] table thead tr th:nth-child(3),
-    div[data-testid="stDataEditor"] table tbody tr td:nth-child(3) { left: 130px !important; }
-    div[data-testid="stDataEditor"] table thead tr th:nth-child(4),
-    div[data-testid="stDataEditor"] table tbody tr td:nth-child(4) { left: 210px !important; }
-    </style>
-    """, unsafe_allow_html=True)
+    _col_cfg_adv = {
+        "MIN_DIFF":   st.column_config.NumberColumn("Min Diff", format="%.1f"),
+        "MAX_DIFF":   st.column_config.NumberColumn("Max Diff", format="%.1f"),
+        "MAX_WIDTHS": st.column_config.NumberColumn("Max Anchos", format="%d"),
+        "MAX_SKU":    st.column_config.NumberColumn("Max SKU", format="%d"),
+        "WIDTHS_TARGET_ORDER": st.column_config.TextColumn("Orden Anchos"),
+        "OVERSHOOT":  st.column_config.CheckboxColumn("Overshoot"),
+        "UNDERSHOOT": st.column_config.CheckboxColumn("Undershoot"),
+        "PERMITIR_RANGO_SUPERIOR": st.column_config.CheckboxColumn("Rango Sup."),
+        "MAX_SALTO_RANGO": st.column_config.NumberColumn("Max Salto", format="%d"),
+        "SCRAP_REMAINDER":  st.column_config.CheckboxColumn("Scrap"),
+        "APPLY_RULES_BLEACH": st.column_config.CheckboxColumn("Bleach"),
+        "SPLIT_MIN_LBS":    st.column_config.NumberColumn("Split Min", format="%d"),
+        "OVERSHOOT_TOL_PCT": st.column_config.NumberColumn("Tol Over%", format="%.1f%%"),
+        "UNDERSHOOT_TOL_PCT":st.column_config.NumberColumn("Tol Under%",format="%.1f%%"),
+    }
+    _col_cfg = {**_col_cfg_basic, **(_col_cfg_adv if _vista_avanzada else {})}
 
     cap_ed=st.data_editor(
-        tbl_cap, num_rows="dynamic", use_container_width=True, height=h, key=f'editor_cap_{st.session_state["tbl_version"]}',
-        column_config={
-            "CATEGORIA":  st.column_config.TextColumn("Categoría",width="small"),
-            "MINIMO":     st.column_config.NumberColumn("Mín LBS",format="%d"),
-            "MAXIMO":     st.column_config.NumberColumn("Máx LBS",format="%d"),
-            "CAPACIDAD":  st.column_config.NumberColumn("Capacidad Total",format="%d"),
-            "MIX":        st.column_config.SelectboxColumn("MIX",options=["DYE","BLEACH"]),
-            "MIN_DIFF":   st.column_config.NumberColumn("Min Diff Anchos",format="%.1f",help="Diferencia mínima entre anchos"),
-            "MAX_DIFF":   st.column_config.NumberColumn("Max Diff Anchos",format="%.1f",help="Diferencia máxima entre anchos"),
-            "MAX_WIDTHS": st.column_config.NumberColumn("Max Anchos",format="%d",help="Máximo de anchos distintos por lote"),
-            "MAX_SKU":    st.column_config.NumberColumn("Max SKU",format="%d",help="Máximo de SKUs por lote"),
-            "WIDTHS_TARGET_ORDER": st.column_config.TextColumn("Orden Anchos",help="Ej: 2>3>1"),
-            "OVERSHOOT":  st.column_config.CheckboxColumn("Overshoot",help="Permitir exceder la orden"),
-            "UNDERSHOOT": st.column_config.CheckboxColumn("Undershoot",help="Permitir quedarse bajo la orden"),
-            "PERMITIR_RANGO_SUPERIOR": st.column_config.CheckboxColumn("Rango Superior",help="Permitir colocar en rango mayor"),
-            "MAX_SALTO_RANGO": st.column_config.NumberColumn("Max Salto",format="%d",help="Cuántos rangos arriba puede subir"),
-            "SCRAP_REMAINDER":  st.column_config.CheckboxColumn("Scrap Residuo",help="Descartar residuos menores al mínimo de split"),
-            "APPLY_RULES_BLEACH": st.column_config.CheckboxColumn("Reglas Bleach",help="Aplicar reglas de restricción también a BLEACH"),
-            "SPLIT_MIN_LBS":    st.column_config.NumberColumn("Split Min LBS",format="%d"),
-            "OVERSHOOT_TOL_PCT":  st.column_config.NumberColumn("Tol Over %",format="%.1f%%",help="% tolerancia overshoot para este rango"),
-            "UNDERSHOOT_TOL_PCT": st.column_config.NumberColumn("Tol Under %",format="%.1f%%"),
-        },
+        _tbl_show, num_rows="dynamic", use_container_width=True, height=h,
+        key=f'editor_cap_{st.session_state["tbl_version"]}{"_adv" if _vista_avanzada else "_bas"}',
+        column_config=_col_cfg,
     )
+    # Merge edited basic cols back into full table
+    if not _vista_avanzada:
+        _full = tbl_cap.copy()
+        for c in _basic_cols:
+            if c in cap_ed.columns and c in _full.columns:
+                # align by position (same rows)
+                _full = _full.reset_index(drop=True)
+                cap_ed = cap_ed.reset_index(drop=True)
+                _full[c] = cap_ed[c]
+        # Handle added/deleted rows: if cap_ed has more rows, append with defaults
+        if len(cap_ed) != len(_full):
+            cap_ed_full = cap_ed.copy()
+            for c in _adv_cols:
+                if c not in cap_ed_full.columns:
+                    cap_ed_full[c] = CAP_DEFAULTS.get(c, None)
+            _full = cap_ed_full
+        cap_ed = _full
 
     b_col,s_col=st.columns([1,3])
     with b_col:
@@ -870,24 +889,23 @@ with tab_g:
     if df_res.empty:
         st.info("Sin datos de lotes.")
     else:
-        # Shared filters
         _f1,_f2,_f3 = st.columns(3)
-        _mix_opts  = ["Todos"] + sorted(df_res["MIX"].unique().tolist())
-        _cat_opts  = ["Todas"] + sorted(df_res["CATEGORIA"].dropna().unique().tolist())
-        _blq_opts  = ["Todos"] + sorted(df_res["BLOQUE_DOMINANTE"].dropna().unique().tolist()) if "BLOQUE_DOMINANTE" in df_res.columns else ["Todos"]
-        _f_mix  = _f1.selectbox("MIX",   _mix_opts, key="dg_mix")
-        _f_cat  = _f2.selectbox("Categoría", _cat_opts, key="dg_cat")
-        _f_blq  = _f3.selectbox("Bloque", _blq_opts, key="dg_blq")
+        _mix_opts = ["Todos"] + sorted(df_res["MIX"].unique().tolist())
+        _cat_opts = ["Todas"] + sorted(df_res["CATEGORIA"].dropna().unique().tolist())
+        _blq_opts = ["Todos"] + (sorted(df_res["BLOQUE_DOMINANTE"].dropna().unique().tolist()) if "BLOQUE_DOMINANTE" in df_res.columns else [])
+        _f_mix = _f1.selectbox("MIX",       _mix_opts, key="dg_mix")
+        _f_cat = _f2.selectbox("Categoría", _cat_opts, key="dg_cat")
+        _f_blq = _f3.selectbox("Bloque",    ["Todos"]+_blq_opts, key="dg_blq")
 
+        # Filter once — pass as frozen tuple to cached functions
         _df_f = df_res.copy()
-        if _f_mix  != "Todos":  _df_f = _df_f[_df_f["MIX"]==_f_mix]
-        if _f_cat  != "Todas":  _df_f = _df_f[_df_f["CATEGORIA"]==_f_cat]
-        if _f_blq  != "Todos" and "BLOQUE_DOMINANTE" in _df_f.columns:
+        if _f_mix != "Todos":  _df_f = _df_f[_df_f["MIX"]==_f_mix]
+        if _f_cat != "Todas":  _df_f = _df_f[_df_f["CATEGORIA"]==_f_cat]
+        if _f_blq != "Todos" and "BLOQUE_DOMINANTE" in _df_f.columns:
             _df_f = _df_f[_df_f["BLOQUE_DOMINANTE"]==_f_blq]
 
         d_left, d_right = st.columns(2)
 
-        # ── Donut 1: Por N° de Anchos ──────────────────────────────────────
         with d_left:
             st.markdown("**Por cantidad de anchos**")
             if _df_f.empty:
@@ -900,59 +918,47 @@ with tab_g:
                 _colors = ["#9FE1CB","#1D9E75","#0F6E56","#04342C","#B5D4F4","#378ADD"]
                 _fig1 = go.Figure(go.Pie(
                     labels=[f"{int(r.ANCHOS_UNICOS)} ancho{'s' if r.ANCHOS_UNICOS>1 else ''}" for _,r in _anc.iterrows()],
-                    values=_anc["Lotes"],
-                    hole=0.55,
-                    marker_colors=_colors[:len(_anc)],
-                    textinfo="label+percent",
+                    values=_anc["Lotes"], hole=0.55,
+                    marker_colors=_colors[:len(_anc)], textinfo="label+percent",
                     hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
                 ))
-                _fig1.update_layout(height=320, margin=dict(t=20,b=10,l=10,r=10), showlegend=False)
+                _fig1.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
                 st.plotly_chart(_fig1, use_container_width=True)
-                # Tabla resumen
-                _anc_disp = _anc.copy()
-                _anc_disp["ANCHOS_UNICOS"] = _anc_disp["ANCHOS_UNICOS"].astype(int)
-                _anc_disp["% Lotes"] = (_anc_disp["Lotes"]/_anc_disp["Lotes"].sum()*100).round(1)
-                _anc_disp["LBS"] = _anc_disp["LBS"].apply(fmt)
-                _anc_disp = _anc_disp.rename(columns={"ANCHOS_UNICOS":"N° Anchos"})
-                st.dataframe(_anc_disp[["N° Anchos","Lotes","% Lotes","LBS"]], use_container_width=True, hide_index=True)
+                _ad = _anc.copy()
+                _ad["ANCHOS_UNICOS"] = _ad["ANCHOS_UNICOS"].astype(int)
+                _ad["% Lotes"] = (_ad["Lotes"]/_ad["Lotes"].sum()*100).round(1)
+                _ad["LBS"] = _ad["LBS"].apply(fmt)
+                st.dataframe(_ad.rename(columns={"ANCHOS_UNICOS":"N° Anchos"})[["N° Anchos","Lotes","% Lotes","LBS"]],
+                             use_container_width=True, hide_index=True, height=180)
 
-        # ── Donut 2: Por N° de LNKs por lote ──────────────────────────────
         with d_right:
             st.markdown("**Por cantidad de LNKs por lote**")
             if _df_f.empty or "SKU_DISTINTOS" not in _df_f.columns:
                 st.info("Sin datos.")
             else:
-                # Bin LNKs: 1, 2, 3, 4, 5+
-                def _bin_lnk(n):
+                def _bin(n):
                     n=int(n)
-                    if n<=4: return f"{n} LNK{'s' if n>1 else ''}"
-                    return "5+ LNKs"
+                    return f"{n} LNK{'s' if n>1 else ''}" if n<=4 else "5+ LNKs"
                 _df_f2 = _df_f.copy()
-                _df_f2["_BIN"] = _df_f2["SKU_DISTINTOS"].apply(_bin_lnk)
-                _lnk = (_df_f2.groupby("_BIN")
-                        .agg(Lotes=("LOTE_ID","nunique"), LBS=("LBS_TOTAL","sum"))
-                        .reset_index())
-                _order = ["1 LNK","2 LNKs","3 LNKs","4 LNKs","5+ LNKs"]
-                _lnk["_ord"] = _lnk["_BIN"].apply(lambda x: _order.index(x) if x in _order else 99)
-                _lnk = _lnk.sort_values("_ord").drop(columns=["_ord"])
+                _df_f2["_BIN"] = _df_f2["SKU_DISTINTOS"].apply(_bin)
+                _lnk = _df_f2.groupby("_BIN").agg(Lotes=("LOTE_ID","nunique"),LBS=("LBS_TOTAL","sum")).reset_index()
+                _ord = ["1 LNK","2 LNKs","3 LNKs","4 LNKs","5+ LNKs"]
+                _lnk["_o"] = _lnk["_BIN"].apply(lambda x: _ord.index(x) if x in _ord else 99)
+                _lnk = _lnk.sort_values("_o").drop(columns=["_o"])
                 _colors2 = ["#B5D4F4","#378ADD","#185FA5","#0C447C","#042C53"]
                 _fig2 = go.Figure(go.Pie(
-                    labels=_lnk["_BIN"],
-                    values=_lnk["Lotes"],
-                    hole=0.55,
-                    marker_colors=_colors2[:len(_lnk)],
-                    textinfo="label+percent",
+                    labels=_lnk["_BIN"], values=_lnk["Lotes"], hole=0.55,
+                    marker_colors=_colors2[:len(_lnk)], textinfo="label+percent",
                     hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
                 ))
-                _fig2.update_layout(height=320, margin=dict(t=20,b=10,l=10,r=10), showlegend=False)
+                _fig2.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
                 st.plotly_chart(_fig2, use_container_width=True)
-                _lnk_disp = _lnk.copy()
-                _lnk_disp["% Lotes"] = (_lnk_disp["Lotes"]/_lnk_disp["Lotes"].sum()*100).round(1)
-                _lnk_disp["LBS"] = _lnk_disp["LBS"].apply(fmt)
-                _lnk_disp = _lnk_disp.rename(columns={"_BIN":"LNKs por lote"})
-                st.dataframe(_lnk_disp[["LNKs por lote","Lotes","% Lotes","LBS"]], use_container_width=True, hide_index=True)
+                _ld = _lnk.copy()
+                _ld["% Lotes"] = (_ld["Lotes"]/_ld["Lotes"].sum()*100).round(1)
+                _ld["LBS"] = _ld["LBS"].apply(fmt)
+                st.dataframe(_ld.rename(columns={"_BIN":"LNKs por lote"})[["LNKs por lote","Lotes","% Lotes","LBS"]],
+                             use_container_width=True, hide_index=True, height=180)
 
-    st.divider()
     st.caption("💡 Las tablas resumen detalladas están en la pestaña **📄 Resumen**.")
 
 with tab_d:

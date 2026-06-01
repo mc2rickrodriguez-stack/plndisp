@@ -270,28 +270,42 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
 
     # Pre-filter candidate indices (only those with LBS > 0, not seed)
     seed_set = {seed_idx}
+    _preferir_simples = int(params.get("PREFERIR_LOTES_SIMPLES", 0)) == 1
+    _pen_ancho = float(params.get("PENALIZACION_ANCHO_EXTRA", 1.5))
+    _pen_lnk   = float(params.get("PENALIZACION_LNK_EXTRA",   0.8))
+
     while True:
         remaining=max_allowed-lote_lbs
         if remaining<=1e-6: break
         best=None; best_take=0.0; best_score=-1e30
         lote_set=set(i for i,*_ in lote_rows)
         widths_now=set(float(w) for w in lote_widths if w and not pd.isna(w) and float(w)!=0.0)
+        lnks_now=len(lote_lnks)
 
         for idx in work.index:
             if idx in lote_set: continue
             rest=float(work.at[idx,"LBS_RESTANTES"])
             if rest<=0: continue
-            # FIX: last portion ignores SPLIT_MIN
             orig=float(work.at[idx,"TOTAL"]) if "TOTAL" in work.columns else rest
             eff_split=0.0 if rest<=orig+1e-6 else split_min
             tk=choose_take(rest,remaining,eff_split,allow_scrap_residue=allow_scrap)
             if tk<=0: continue
             ok,_=can_add(idx,tk)
             if not ok: continue
-            # simple score: fill + combo bonus
+
+            # Base score: prefer items that fill more
             widths_add=set(float(w) for w in width_cache.get(idx,[]) if w and float(w)!=0.0)
             combo_bonus=1e-3 if (combo_target and any(abs(w-combo_target)<1e-6 for w in widths_add)) else 0
-            sc=lote_lbs+tk + combo_bonus
+            sc=lote_lbs+tk+combo_bonus
+
+            # PREFERIR_LOTES_SIMPLES: penalize adding new widths or new LNKs
+            if _preferir_simples:
+                new_widths = widths_add - widths_now
+                adds_new_width = len(new_widths) > 0
+                is_new_lnk = work.at[idx,"LNK"] not in lote_lnks
+                sc -= _pen_ancho * (1 if adds_new_width else 0)
+                sc -= _pen_lnk   * (1 if is_new_lnk else 0)
+
             if sc>best_score: best_score=sc; best=idx; best_take=tk
 
         if best is None: break
