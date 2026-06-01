@@ -1,6 +1,7 @@
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import streamlit as st
 
 
 BLOCK_COLORS = {
@@ -16,6 +17,7 @@ MIX_COLORS = {
 }
 
 
+@st.cache_data(show_spinner=False)
 def chart_capacidad_barras(df_cap_cap: pd.DataFrame) -> go.Figure:
     """LBS asignadas vs capacidad por categoría/MIX."""
     if df_cap_cap.empty:
@@ -53,6 +55,7 @@ def chart_capacidad_barras(df_cap_cap: pd.DataFrame) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False)
 def chart_bloques_donut(df_prio_vs_asig: pd.DataFrame) -> go.Figure:
     """Distribución LBS por bloque de prioridad."""
     if df_prio_vs_asig.empty:
@@ -82,6 +85,7 @@ def chart_bloques_donut(df_prio_vs_asig: pd.DataFrame) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False)
 def chart_heatmap_capacidad(df_cap_cap: pd.DataFrame) -> go.Figure:
     """Ocupación % de capacidad DYE vs BLEACH."""
     if df_cap_cap.empty:
@@ -119,6 +123,7 @@ def chart_heatmap_capacidad(df_cap_cap: pd.DataFrame) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False)
 def chart_completitud_lnk(df_lnk_comp: pd.DataFrame) -> go.Figure:
     """Barras apiladas de completitud por LNK."""
     if df_lnk_comp.empty:

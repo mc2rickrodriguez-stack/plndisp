@@ -330,6 +330,25 @@ with st.sidebar:
                                 help="Antes de confirmar un lote que contiene VENCIDOS, verifica que "
                                      "las LBS vencidas restantes en el grupo puedan formar al menos "
                                      "otro lote válido. Evita dejar VENCIDOS huérfanos.")
+        st.divider()
+        simples    =st.checkbox("PREFERIR_LOTES_SIMPLES",
+                                value=bool(int(cv("PREFERIR_LOTES_SIMPLES",0))),
+                                help="Penaliza lotes con muchos anchos o LNKs. "
+                                     "El algoritmo prefiere lotes simples sin prohibir los complejos.")
+        if simples:
+            pen_ancho  =st.slider("Penalización por ancho extra",
+                                   min_value=0.1, max_value=5.0,
+                                   value=float(cv("PENALIZACION_ANCHO_EXTRA",1.5)),
+                                   step=0.1,
+                                   help="Cuánto se penaliza cada ancho adicional más allá del primero")
+            pen_lnk    =st.slider("Penalización por LNK extra",
+                                   min_value=0.1, max_value=5.0,
+                                   value=float(cv("PENALIZACION_LNK_EXTRA",0.8)),
+                                   step=0.1,
+                                   help="Cuánto se penaliza cada LNK adicional más allá del primero")
+        else:
+            pen_ancho = float(cv("PENALIZACION_ANCHO_EXTRA", 1.5))
+            pen_lnk   = float(cv("PENALIZACION_LNK_EXTRA",   0.8))
 
     with st.expander("Agrupamiento"):
         agrupar_tono=st.checkbox("Agrupar por TONO",
@@ -347,6 +366,9 @@ with st.sidebar:
         "OVERSHOOT_TOL_PCT_SMALL":tol_small/100,"OVERSHOOT_TOL_PCT_LARGE":tol_large/100,
         "OVERSHOOT_SMALL_THRESHOLD":tol_thr,
         "LOOKAHEAD_VENCIDOS":int(lookahead),
+        "PREFERIR_LOTES_SIMPLES":int(simples),
+        "PENALIZACION_ANCHO_EXTRA":pen_ancho,
+        "PENALIZACION_LNK_EXTRA":pen_lnk,
         "AGRUPAR_POR_TONO":int(agrupar_tono),"APPLY_RULES_BLEACH":int(apply_bleach),
         "RULE_ORDER":rule_order,"PRIORITY_ORDER":priority_order,
     }
@@ -921,125 +943,103 @@ with tab_g:
                 st.dataframe(_lnk_disp[["LNKs por lote","Lotes","% Lotes","LBS"]], use_container_width=True, hide_index=True)
 
     st.divider()
-    st.markdown("#### 📋 Tablas Resumen")
-    ta,tb,tc,td,te = st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría","Resumen Dinámico"])
-
-    with ta:
-        if df_det.empty or prio_df.empty:
-            st.info("Sin datos.")
-        else:
-            t1 = prio_df.copy()
-            # FIX: lotes come from RESUMEN (1 row per lote), grouped by BLOQUE+MIX
-            if not df_res.empty and "BLOQUE_DOMINANTE" in df_res.columns:
-                lotes_bloque = (df_res.groupby(["BLOQUE_DOMINANTE","MIX"])
-                                .agg(LOTES=("LOTE_ID","nunique")).reset_index())
-                lotes_bloque.columns = ["BLOQUE","MIX","LOTES"]
-                t1 = t1.merge(lotes_bloque, on=["BLOQUE","MIX"], how="left").fillna({"LOTES":0})
-            else:
-                t1["LOTES"] = 0
-            t1["LOTES"] = t1["LOTES"].astype(int)
-            t1["% ASIGNADO"] = (t1["LBS_ASIGNADAS"] / t1["LBS_BASE"].replace(0,pd.NA) * 100).fillna(0).round(1)
-            t1 = t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas",
-                                     "LBS_ASIGNADAS":"LBS Asignadas","LBS_SIN_ASIGNAR":"LBS Sin Asignar"})
-            cols = [c for c in ["Prioridad","MIX","LBS Planeadas","LBS Asignadas","LBS Sin Asignar","LOTES","% ASIGNADO"] if c in t1.columns]
-            st.dataframe(t1[cols], use_container_width=True, hide_index=True)
-
-    with tb:
-        if df_res.empty:
-            st.info("Sin datos.")
-        else:
-            t2 = (df_res.groupby("ANCHOS_UNICOS")
-                  .agg(LBS_Asignadas=("LBS_TOTAL","sum"), Lotes=("LOTE_ID","nunique"))
-                  .reset_index().sort_values("ANCHOS_UNICOS"))
-            t2.columns = ["N° Anchos","LBS Asignadas","Lotes"]
-            total = t2["LBS Asignadas"].sum()
-            t2["% del Total"] = (t2["LBS Asignadas"] / total * 100).round(1) if total>0 else 0
-            st.dataframe(t2, use_container_width=True, hide_index=True)
-
-    with tc:
-        if df_res.empty:
-            st.info("Sin datos.")
-        else:
-            t3 = (df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"])
-                  .agg(LBS_Asignadas=("LBS_TOTAL","sum"),
-                       Lotes=("LOTE_ID","nunique"),
-                       Min_LBS_Lote=("LBS_TOTAL","min"),
-                       Max_LBS_Lote=("LBS_TOTAL","max"))
-                  .reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"]))
-            t3.columns = ["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
-            st.dataframe(t3, use_container_width=True, hide_index=True)
-
-    with td:
-        if cap_df.empty:
-            st.info("Sin datos.")
-        else:
-            t4 = cap_df.copy()
-            if not df_res.empty:
-                lotes_cat = (df_res.groupby("CATEGORIA")
-                             .agg(LOTES=("LOTE_ID","nunique")).reset_index())
-                t4 = t4.merge(lotes_cat, on="CATEGORIA", how="left").fillna({"LOTES":0})
-                t4["LOTES"] = t4["LOTES"].astype(int)
-            disp = {"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX",
-                    "LBS_ASIGNADAS":"LBS Asignadas","LOTES":"Lotes",
-                    "CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
-            t4 = t4.rename(columns=disp)
-            st.dataframe(t4[[v for v in disp.values() if v in t4.columns]], use_container_width=True, hide_index=True)
-
-    with te:
-        st.markdown("**Resumen dinámico de resultados** — agrupa los lotes generados por los campos que elijas.")
-        if df_det.empty:
-            st.info("Sin datos de lotes generados.")
-        else:
-            RES_GROUP_OPTS = [c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA",
-                                           "TONO","MIX","BLOQUE","APLICA_REGLA","CATEGORIA",
-                                           "PRIORIDAD","ANCHOS_LOTE","LNK"]
-                              if c in df_det.columns]
-            RES_METRIC_OPTS = {"LBS Asignadas":"LBS_ASIGNADAS","Docenas":"DOCENAS"}
-            valid_res_m = {k:v for k,v in RES_METRIC_OPTS.items() if v in df_det.columns}
-
-            re1,re2,re3 = st.columns([3,2,1])
-            rg_sel  = re1.multiselect("Agrupar por",RES_GROUP_OPTS,
-                                       default=["MIX","BLOQUE"] if "BLOQUE" in df_det.columns else RES_GROUP_OPTS[:1],
-                                       key="rg_sel")
-            rm_sel  = re2.selectbox("Métrica",list(valid_res_m.keys()),key="rm_sel")
-            rn_top  = re3.number_input("Top N",5,500,50,key="rn_top")
-
-            if rg_sel and rm_sel:
-                mc = valid_res_m[rm_sel]
-                try:
-                    rt = df_det.groupby(rg_sel,as_index=False)[mc].sum()
-                    rt = rt.sort_values(mc,ascending=False).head(rn_top)
-                    rt[mc] = rt[mc].round(1)
-                    total_m = df_det[mc].sum()
-                    rt["% del Total"] = (rt[mc]/total_m*100).round(1) if total_m>0 else 0
-                    rt = rt.rename(columns={mc:rm_sel})
-                    st.dataframe(rt, use_container_width=True, hide_index=True,
-                                 height=min(60+35*len(rt),420))
-                    st.caption(f"Total {rm_sel}: {total_m:,.1f} · {len(rt)} grupos")
-                except Exception as e:
-                    st.error(f"Error al agrupar: {e}")
+    st.caption("💡 Las tablas resumen detalladas están en la pestaña **📄 Resumen**.")
 
 with tab_d:
     if df_det.empty: st.info("Sin lotes.")
     else:
         d1,d2,d3=st.columns(3)
-        fm=d1.multiselect("MIX",sorted(df_det["MIX"].unique()),key="dm")
-        fr=d2.multiselect("Regla",sorted(df_det["APLICA_REGLA"].unique()),key="dr")
-        fb=d3.multiselect("Bloque",sorted(df_det["BLOQUE"].unique()),key="db")
+        fm=d1.multiselect("MIX",    sorted(df_det["MIX"].unique()),key="dm")
+        fr=d2.multiselect("Regla",  sorted(df_det["APLICA_REGLA"].unique()),key="dr")
+        fb=d3.multiselect("Bloque", sorted(df_det["BLOQUE"].unique()),key="db")
         filt=df_det.copy()
         if fm: filt=filt[filt["MIX"].isin(fm)]
         if fr: filt=filt[filt["APLICA_REGLA"].isin(fr)]
         if fb: filt=filt[filt["BLOQUE"].isin(fb)]
+        MAX_ROWS=2000
+        if len(filt)>MAX_ROWS:
+            st.caption(f"⚠️ Mostrando primeras {MAX_ROWS:,} de {len(filt):,} filas. Usa filtros para reducir.")
+            filt=filt.head(MAX_ROWS)
         st.dataframe(filt,use_container_width=True,height=420)
-        st.caption(f"{len(filt):,} filas")
+        st.caption(f"{len(filt):,} filas visibles")
 
 with tab_r:
     if df_res.empty: st.info("Sin resumen.")
     else:
-        st.dataframe(df_res,use_container_width=True,height=380)
-        st.subheader("Capacidad por Categoría")
-        cap_df=reports.get("CAPACIDAD_X_CATEG",pd.DataFrame())
-        st.dataframe(cap_df,use_container_width=True)
+        st.dataframe(df_res,use_container_width=True,height=350)
+        st.divider()
+        st.markdown("#### 📋 Tablas Resumen")
+        ta,tb,tc,td,te=st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría","Resumen Dinámico"])
+
+        with ta:
+            prio_df2=reports.get("PRIORIDAD_VS_ASIG",pd.DataFrame())
+            if prio_df2.empty: st.info("Sin datos.")
+            else:
+                t1=prio_df2.copy()
+                if not df_res.empty and "BLOQUE_DOMINANTE" in df_res.columns:
+                    lb2=(df_res.groupby(["BLOQUE_DOMINANTE","MIX"]).agg(LOTES=("LOTE_ID","nunique")).reset_index())
+                    lb2.columns=["BLOQUE","MIX","LOTES"]
+                    t1=t1.merge(lb2,on=["BLOQUE","MIX"],how="left").fillna({"LOTES":0})
+                else:
+                    t1["LOTES"]=0
+                t1["LOTES"]=t1["LOTES"].astype(int)
+                t1["% ASIGNADO"]=(t1["LBS_ASIGNADAS"]/t1["LBS_BASE"].replace(0,pd.NA)*100).fillna(0).round(1)
+                t1=t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas","LBS_ASIGNADAS":"LBS Asignadas","LBS_SIN_ASIGNAR":"LBS Sin Asignar"})
+                cols=[c for c in ["Prioridad","MIX","LBS Planeadas","LBS Asignadas","LBS Sin Asignar","LOTES","% ASIGNADO"] if c in t1.columns]
+                st.dataframe(t1[cols],use_container_width=True,hide_index=True)
+
+        with tb:
+            if df_res.empty: st.info("Sin datos.")
+            else:
+                t2=(df_res.groupby("ANCHOS_UNICOS").agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique")).reset_index().sort_values("ANCHOS_UNICOS"))
+                t2.columns=["N° Anchos","LBS Asignadas","Lotes"]
+                tot=t2["LBS Asignadas"].sum()
+                t2["% del Total"]=(t2["LBS Asignadas"]/tot*100).round(1) if tot>0 else 0
+                st.dataframe(t2,use_container_width=True,hide_index=True)
+
+        with tc:
+            if df_res.empty: st.info("Sin datos.")
+            else:
+                t3=(df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"]).agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique"),MinLBS=("LBS_TOTAL","min"),MaxLBS=("LBS_TOTAL","max")).reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"]))
+                t3.columns=["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
+                st.dataframe(t3,use_container_width=True,hide_index=True)
+
+        with td:
+            cap_df2=reports.get("CAPACIDAD_X_CATEG",pd.DataFrame())
+            if cap_df2.empty: st.info("Sin datos.")
+            else:
+                t4=cap_df2.copy()
+                if not df_res.empty:
+                    lc=df_res.groupby("CATEGORIA").agg(LOTES=("LOTE_ID","nunique")).reset_index()
+                    t4=t4.merge(lc,on="CATEGORIA",how="left").fillna({"LOTES":0})
+                    t4["LOTES"]=t4["LOTES"].astype(int)
+                disp={"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX","LBS_ASIGNADAS":"LBS Asignadas","LOTES":"Lotes","CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
+                t4=t4.rename(columns=disp)
+                st.dataframe(t4[[v for v in disp.values() if v in t4.columns]],use_container_width=True,hide_index=True)
+
+        with te:
+            st.markdown("**Resumen dinámico** — agrupa por los campos que elijas.")
+            if df_det.empty: st.info("Sin datos.")
+            else:
+                RES_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO","MIX","BLOQUE","APLICA_REGLA","CATEGORIA","PRIORIDAD","ANCHOS_LOTE","LNK"] if c in df_det.columns]
+                METRIC_OPTS={k:v for k,v in {"LBS Asignadas":"LBS_ASIGNADAS","Docenas":"DOCENAS"}.items() if v in df_det.columns}
+                re1,re2,re3=st.columns([3,2,1])
+                rg_sel=re1.multiselect("Agrupar por",RES_OPTS,default=["MIX","BLOQUE"] if "BLOQUE" in df_det.columns else RES_OPTS[:1],key="rg_sel")
+                rm_sel=re2.selectbox("Métrica",list(METRIC_OPTS.keys()),key="rm_sel")
+                rn_top=re3.number_input("Top N",5,500,50,key="rn_top")
+                if rg_sel and rm_sel:
+                    mc=METRIC_OPTS[rm_sel]
+                    try:
+                        rt=df_det.groupby(rg_sel,as_index=False)[mc].sum()
+                        rt=rt.sort_values(mc,ascending=False).head(rn_top)
+                        total_m=df_det[mc].sum()
+                        rt["% del Total"]=(rt[mc]/total_m*100).round(1) if total_m>0 else 0
+                        rt=rt.rename(columns={mc:rm_sel})
+                        st.dataframe(rt,use_container_width=True,hide_index=True,height=min(60+35*len(rt),380))
+                        st.caption(f"Total {rm_sel}: {total_m:,.1f} · {len(rt)} grupos")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
 
 with tab_l:
     dlog=reports.get("DECISION_LOG",pd.DataFrame())

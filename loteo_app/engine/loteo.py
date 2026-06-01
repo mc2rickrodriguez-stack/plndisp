@@ -160,19 +160,17 @@ DESCARTE_MSGS = {
 
 def score_lote(lote_dict, widths_set, params, rango):
     if lote_dict is None: return -1e30
-    # Quality slider drives weights
+
     ql = int(params.get("QUALITY_LEVEL",5))
-    # Higher quality → stronger fill preference
-    W_FILL      = 3.0 + ql*0.4          # 3.4 → 7.0
-    W_CAP_LOSS  = 1.0 + ql*0.2          # 1.2 → 3.0  (normalized per lbs)
-    W_WIDTH     = 1.0 + (10-ql)*0.3     # WIDTHS as scoring weight, not filter
+    W_FILL      = 3.0 + ql*0.4
+    W_CAP_LOSS  = 1.0 + ql*0.2
+    W_WIDTH     = 1.0 + (10-ql)*0.3
 
     total  = float(lote_dict.get("TOTAL_LOTE",0.0))
     maximo = float(lote_dict.get("MAXIMO",1.0))
     fill   = total/maximo if maximo>1e-9 else 0.0
     cap_loss_norm = (maximo-total)/maximo if maximo>1e-9 else 0.0
 
-    # WIDTHS_TARGET_ORDER from rango first, then global
     order_text = rango_param(rango,"WIDTHS_TARGET_ORDER",params,"2>3>1")
     targets=[int(x) for x in str(order_text).split(">") if x.strip().isdigit()]
     nw=len(widths_set)
@@ -180,7 +178,23 @@ def score_lote(lote_dict, widths_set, params, rango):
     except: rank=len(targets)+abs(nw-(targets[-1] if targets else 2))
     width_score = -float(rank)/max(len(targets),1)
 
-    return W_FILL*fill - W_CAP_LOSS*cap_loss_norm + W_WIDTH*width_score
+    score = W_FILL*fill - W_CAP_LOSS*cap_loss_norm + W_WIDTH*width_score
+
+    # ── PREFERIR_LOTES_SIMPLES ────────────────────────────────────────────
+    # Cuando está activo, penaliza cada ancho y LNK adicional más allá del
+    # primero. El algoritmo sigue pudiendo formar lotes complejos si no hay
+    # otra opción, pero los prefiere solo como último recurso.
+    if int(params.get("PREFERIR_LOTES_SIMPLES", 0)) == 1:
+        n_lnks = int(lote_dict.get("N_LNKS", nw))  # passed from caller
+        pen_anchos = float(params.get("PENALIZACION_ANCHO_EXTRA", 1.5))
+        pen_lnks   = float(params.get("PENALIZACION_LNK_EXTRA",   0.8))
+        # Penalización acumulativa: 0 para el primero, pen * (n-1) para el resto
+        anchos_extra = max(0, nw - 1)
+        lnks_extra   = max(0, n_lnks - 1)
+        score -= pen_anchos * anchos_extra
+        score -= pen_lnks   * lnks_extra
+
+    return score
 
 # ── Core lote builder ─────────────────────────────────────────────────────────
 def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
@@ -507,7 +521,9 @@ def run_loteo(df_data, df_cap, params,
 
                     if lote is not None:
                         wset=set(lote["FINAL_WIDTHS"])
-                        sc=score_lote({"TOTAL_LOTE":lote["TOTAL_LOTE"],"MAXIMO":lote["MAXIMO"]},
+                        n_lnks=len({work.at[idx,"LNK"] for idx,*_ in lote["ROWS"]})
+                        sc=score_lote({"TOTAL_LOTE":lote["TOTAL_LOTE"],"MAXIMO":lote["MAXIMO"],
+                                        "N_LNKS":n_lnks},
                                       wset,params,r if 'r' in dir() else ranges_mix[0])
                         if sc>best_score:
                             best_score=sc; best_lote=lote
@@ -671,6 +687,9 @@ def run_loteo(df_data, df_cap, params,
     df_par=pd.DataFrame([
         ["QUALITY_LEVEL",quality_level],["BEAM_WIDTH",beam_w],
         ["LOOKAHEAD_VENCIDOS",params.get("LOOKAHEAD_VENCIDOS",1)],
+        ["PREFERIR_LOTES_SIMPLES",params.get("PREFERIR_LOTES_SIMPLES",0)],
+        ["PENALIZACION_ANCHO_EXTRA",params.get("PENALIZACION_ANCHO_EXTRA",1.5)],
+        ["PENALIZACION_LNK_EXTRA",params.get("PENALIZACION_LNK_EXTRA",0.8)],
         ["RULE_ORDER",params.get("RULE_ORDER","")],
         ["PRIORITY_ORDER",params.get("PRIORITY_ORDER","")],
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
