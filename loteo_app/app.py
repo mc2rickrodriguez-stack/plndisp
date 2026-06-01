@@ -721,8 +721,18 @@ if run_btn and can_run:
         try:
             df_data2,df_cap2,params2,_=load_inputs(io.BytesIO(st.session_state.raw_file_bytes),
                                                     param_overrides=all_overrides)
-            params2["QUALITY_LEVEL"] = int(all_overrides.get("QUALITY_LEVEL", 5))
-            params2["BEAM_WIDTH"]    = quality_to_beam(params2["QUALITY_LEVEL"])
+            # Parámetros que el loader no conoce → aplicar directamente sobre params2
+            params2["QUALITY_LEVEL"]          = int(all_overrides.get("QUALITY_LEVEL", 5))
+            params2["BEAM_WIDTH"]             = quality_to_beam(params2["QUALITY_LEVEL"])
+            params2["LOOKAHEAD_VENCIDOS"]     = int(all_overrides.get("LOOKAHEAD_VENCIDOS", 1))
+            params2["PREFERIR_LOTES_SIMPLES"] = int(all_overrides.get("PREFERIR_LOTES_SIMPLES", 0))
+            params2["PENALIZACION_ANCHO_EXTRA"]= float(all_overrides.get("PENALIZACION_ANCHO_EXTRA", 1.5))
+            params2["PENALIZACION_LNK_EXTRA"]  = float(all_overrides.get("PENALIZACION_LNK_EXTRA", 0.8))
+            params2["OVERSHOOT_ENABLE"]        = int(all_overrides.get("OVERSHOOT_ENABLE", 1))
+            params2["UNDERSHOOT_ENABLE"]       = int(all_overrides.get("UNDERSHOOT_ENABLE", 1))
+            params2["OVERSHOOT_TOL_PCT_SMALL"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_SMALL", 0.05))
+            params2["OVERSHOOT_TOL_PCT_LARGE"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_LARGE", 0.02))
+            params2["OVERSHOOT_SMALL_THRESHOLD"]= float(all_overrides.get("OVERSHOOT_SMALL_THRESHOLD", 5000))
 
             cap_ui=get_tbl("tbl_capacidades",empty_cap)
             if not cap_ui.empty:
