@@ -418,8 +418,8 @@ def run_loteo(df_data, df_cap, params,
     dispon_index: DisponibilidadIndex para modo restricción de tejido.
                   None = modo libre (comportamiento original).
     Returns (df_detalle, df_resumen, df_excedentes, df_params, cancelled:bool,
-             df_detalle_tejido, df_stock_report)
-    Los dos últimos son DataFrames vacíos en modo libre.
+             df_detalle_tejido, df_stock_report, df_tejido_ocioso)
+    Los tres últimos son DataFrames vacíos en modo libre.
     """
     modo_restriccion = dispon_index is not None
 
@@ -839,11 +839,13 @@ def run_loteo(df_data, df_cap, params,
     # Reportes de tejido (vacíos en modo libre)
     if modo_restriccion:
         df_detalle_tejido, df_stock_report = dispon_index.build_reports()
+        df_tejido_ocioso = dispon_index.build_tejido_ocioso(df_data)
     else:
         df_detalle_tejido = pd.DataFrame()
         df_stock_report   = pd.DataFrame()
+        df_tejido_ocioso  = pd.DataFrame()
 
-    return df_det, df_res, exced, df_par, cancelled, df_detalle_tejido, df_stock_report
+    return df_det, df_res, exced, df_par, cancelled, df_detalle_tejido, df_stock_report, df_tejido_ocioso
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────
