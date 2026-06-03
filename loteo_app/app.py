@@ -1222,17 +1222,52 @@ with tab_t:
 
         with st1:
             st.caption("Una fila por cada componente de tejido asignado a un lote.")
-            # Filtros
-            fc1,fc2,fc3 = st.columns(3)
+
+            # ── Resumen de lotes por día ──────────────────────────────────
+            if "DIA_LOTE" in df_tej.columns:
+                st.markdown("**📅 Resumen de lotes por día de disponibilidad**")
+                _dia_ord = {"INV MANO": 0}
+                for _i in range(1, 11): _dia_ord[f"DIA {_i}"] = _i
+
+                _resumen_dia = (
+                    df_tej.groupby("DIA_LOTE")["LOTE_ID"]
+                    .nunique()
+                    .reset_index()
+                    .rename(columns={"LOTE_ID": "Lotes", "DIA_LOTE": "Día"})
+                )
+                _lbs_dia = (
+                    df_tej.groupby("DIA_LOTE")["LBS_ASIGNADAS"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"LBS_ASIGNADAS": "LBS Tejido", "DIA_LOTE": "Día"})
+                )
+                _resumen_dia = _resumen_dia.merge(_lbs_dia, on="Día")
+                _resumen_dia["_ord"] = _resumen_dia["Día"].map(lambda x: _dia_ord.get(x, 99))
+                _resumen_dia = _resumen_dia.sort_values("_ord").drop(columns=["_ord"]).reset_index(drop=True)
+                _resumen_dia["LBS Tejido"] = _resumen_dia["LBS Tejido"].apply(lambda x: f"{x:,.0f}")
+                _total_lotes = df_tej["LOTE_ID"].nunique()
+                _resumen_dia.loc[len(_resumen_dia)] = ["TOTAL", _total_lotes, f"{df_tej['LBS_ASIGNADAS'].sum():,.0f}"]
+                st.dataframe(_resumen_dia, use_container_width=True, hide_index=True, height=min(60+35*len(_resumen_dia), 320))
+                st.divider()
+
+            # ── Filtros ───────────────────────────────────────────────────
+            fc1,fc2,fc3,fc4 = st.columns(4)
             _lotes_f  = fc1.multiselect("LOTE_ID",  sorted(df_tej["LOTE_ID"].unique()),  key="tf_lote")
             _estilos_f= fc2.multiselect("ESTILO C", sorted(df_tej["ESTILO C"].unique()), key="tf_estilo")
             _fuentes_f= fc3.multiselect("FUENTE",   sorted(df_tej["FUENTE"].unique()),   key="tf_fuente")
+            _dias_f   = fc4.multiselect("DÍA LOTE",
+                sorted(df_tej["DIA_LOTE"].unique(),
+                       key=lambda x: _dia_ord.get(x, 99)) if "DIA_LOTE" in df_tej.columns else [],
+                key="tf_dia")
 
             df_tej_f = df_tej.copy()
             if _lotes_f:   df_tej_f = df_tej_f[df_tej_f["LOTE_ID"].isin(_lotes_f)]
             if _estilos_f: df_tej_f = df_tej_f[df_tej_f["ESTILO C"].isin(_estilos_f)]
             if _fuentes_f: df_tej_f = df_tej_f[df_tej_f["FUENTE"].isin(_fuentes_f)]
+            if _dias_f and "DIA_LOTE" in df_tej_f.columns:
+                df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
 
+            st.caption(f"{len(df_tej_f):,} filas · {df_tej_f['LOTE_ID'].nunique():,} lotes")
             st.dataframe(df_tej_f, use_container_width=True, height=420)
 
         with st2:
