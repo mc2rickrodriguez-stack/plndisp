@@ -484,8 +484,8 @@ with st.sidebar:
 st.markdown("## 🧶 NV2 Loteo Tintorería")
 st.caption("Optimización · Lotes · Asignación de Pedidos")
 
-# ── Sección 1: Carga ──────────────────────────────────────────────────────
-with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
+# ──  1: Carga ──────────────────────────────────────────────────────
+with st.expander("📁  Sección 1 — Carga de Archivo", expanded=False):
     u_col,i_col=st.columns([2,1])
     with u_col:
         uploaded=st.file_uploader("Excel (.xlsx/.xlsm)",type=["xlsx","xlsm"],
@@ -571,7 +571,7 @@ with st.expander("📁  Sección 1 — Carga de Archivo", expanded=True):
                 st.info("Selecciona al menos un campo para agrupar.")
 
 # ── Sección 2: Capacidad ──────────────────────────────────────────────────
-with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=True):
+with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=False):
     st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
                 'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
                 unsafe_allow_html=True)
@@ -766,7 +766,7 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
 
 
 # (seccion_solver)
-with st.expander("⚗️  Sección 5 — LOTEO", expanded=True):
+with st.expander("⚗️  Sección 5 — LOTEO", expanded=False):
   # ── Botón principal ────────────────────────────────────────────────────────
 #  st.divider()
   can_run=(st.session_state.df_data is not None and
@@ -1301,7 +1301,4 @@ st.download_button("⬇  Descargar Excel completo",data=export_excel(res),
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
 
-with st.expander("📋  Sección prueba", expanded=True):
-    st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
-                'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
-                unsafe_allow_html=True)
+
