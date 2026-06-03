@@ -484,203 +484,203 @@ with st.sidebar:
 st.markdown("## 🧶 NV2 Loteo Tintorería")
 st.caption("Optimización · Lotes · Asignación de Pedidos")
 
-# ──  1: Carga ──────────────────────────────────────────────────────
-with st.expander("📁  Sección 1 — Carga de Archivo", expanded=False):
-    u_col,i_col=st.columns([2,1])
-    with u_col:
-        uploaded=st.file_uploader("Excel (.xlsx/.xlsm)",type=["xlsx","xlsm"],
-                                  key="file_upload",label_visibility="collapsed")
-    with i_col:
-        if st.session_state.df_data is not None:
-            df_data=st.session_state.df_data
-            st.success(f"✅ **{st.session_state.raw_file_name}**")
-            st.caption(f"{len(df_data):,} filas · {fmt(df_data['TOTAL'].sum())} LBS")
-        else: st.info("Sin archivo")
-
-    if uploaded:
-        import hashlib
-        fb = uploaded.read()
-        # Identificamos el archivo por hash MD5 del contenido.
-        # Recargamos SIEMPRE que el contenido cambie, sin importar nombre ni tamaño.
-        # No usamos raw_file_bytes para comparar porque ese puede venir de un perfil.
-        _content_hash = hashlib.md5(fb).hexdigest()
-        _uploader_hash = st.session_state.get("_uploader_last_hash", None)
-
-        if _content_hash != _uploader_hash:
-            st.session_state["_uploader_last_hash"] = _content_hash
-            with st.spinner("Leyendo…"):
-                try:
-                    df_data,df_cap,params,hdr=load_inputs(io.BytesIO(fb))
-                    st.session_state.df_data=df_data; st.session_state.df_cap=df_cap
-                    st.session_state.params=params; st.session_state.raw_file_bytes=fb
-                    st.session_state.raw_file_name=uploaded.name
-                    load_tables_from_excel(fb); st.rerun()
-                except Exception as e: st.error(str(e))
-
+# ── Sección 1: Carga ──────────────────────────────────────────────────────
+st.markdown("### 📁 Sección 1 — Carga de Archivo")
+u_col,i_col=st.columns([2,1])
+with u_col:
+    uploaded=st.file_uploader("Excel (.xlsx/.xlsm)",type=["xlsx","xlsm"],
+                              key="file_upload",label_visibility="collapsed")
+with i_col:
     if st.session_state.df_data is not None:
-        with st.expander("🔍 Vista previa DATA"):
-            df_data=st.session_state.df_data
-            f1,f2=st.columns([3,1])
-            mix_sel=f1.selectbox("MIX",["Todos"]+sorted(df_data["MIX"].unique().tolist()),
-                                 key="prev_mix",label_visibility="collapsed")
-            n_rows=f2.number_input("Filas",5,500,50,key="prev_n",label_visibility="collapsed")
-            prev=df_data if mix_sel=="Todos" else df_data[df_data["MIX"]==mix_sel]
-            st.dataframe(prev.head(n_rows),use_container_width=True,height=220)
+        df_data=st.session_state.df_data
+        st.success(f"✅ **{st.session_state.raw_file_name}**")
+        st.caption(f"{len(df_data):,} filas · {fmt(df_data['TOTAL'].sum())} LBS")
+    else: st.info("Sin archivo")
 
-        with st.expander("📊 Resumen dinámico de DATA"):
-            df_data=st.session_state.df_data
-            # Available grouping columns
-            GROUP_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO",
-                                     "MIX","PRIORIDAD","ANCHO.F.C","ANCHO.F.M","LNK"]
-                        if c in df_data.columns]
-            # Metric options
-            METRIC_OPTS={"LBS (TOTAL)":"TOTAL","Docenas (CONSUMO_C)":"CONSUMO_C"}
-            valid_metrics={k:v for k,v in METRIC_OPTS.items() if v in df_data.columns}
+if uploaded:
+    import hashlib
+    fb = uploaded.read()
+    # Identificamos el archivo por hash MD5 del contenido.
+    # Recargamos SIEMPRE que el contenido cambie, sin importar nombre ni tamaño.
+    # No usamos raw_file_bytes para comparar porque ese puede venir de un perfil.
+    _content_hash = hashlib.md5(fb).hexdigest()
+    _uploader_hash = st.session_state.get("_uploader_last_hash", None)
 
-            rc1,rc2,rc3=st.columns([3,3,2])
-            with rc1:
-                group_sel=st.multiselect(
-                    "Agrupar por",GROUP_OPTS,
-                    default=[GROUP_OPTS[0]] if GROUP_OPTS else [],
-                    key="rsm_group",
-                    help="Selecciona uno o más campos para agrupar"
-                )
-            with rc2:
-                metric_sel=st.selectbox(
-                    "Métrica",list(valid_metrics.keys()),key="rsm_metric"
-                )
-            with rc3:
-                top_n=st.number_input("Top N filas",min_value=5,max_value=500,value=50,step=5,key="rsm_n")
+    if _content_hash != _uploader_hash:
+        st.session_state["_uploader_last_hash"] = _content_hash
+        with st.spinner("Leyendo…"):
+            try:
+                df_data,df_cap,params,hdr=load_inputs(io.BytesIO(fb))
+                st.session_state.df_data=df_data; st.session_state.df_cap=df_cap
+                st.session_state.params=params; st.session_state.raw_file_bytes=fb
+                st.session_state.raw_file_name=uploaded.name
+                load_tables_from_excel(fb); st.rerun()
+            except Exception as e: st.error(str(e))
 
-            if group_sel and metric_sel:
-                metric_col=valid_metrics[metric_sel]
-                try:
-                    rsm=df_data.groupby(group_sel,as_index=False)[metric_col].sum()
-                    rsm=rsm.sort_values(metric_col,ascending=False).head(top_n)
-                    rsm[metric_col]=rsm[metric_col].round(1)
-                    rsm.columns=group_sel+[metric_sel]
-                    # % del total
-                    total_metric=df_data[metric_col].sum()
-                    rsm["% del Total"]=(rsm[metric_sel]/total_metric*100).round(1) if total_metric>0 else 0
-                    st.dataframe(rsm,use_container_width=True,height=min(60+35*len(rsm),400),
-                                 hide_index=True)
-                    st.caption(f"Total {metric_sel}: {df_data[metric_col].sum():,.1f} · Mostrando top {len(rsm)} de {len(df_data.groupby(group_sel))} grupos")
-                except Exception as e:
-                    st.error(f"Error al agrupar: {e}")
-            else:
-                st.info("Selecciona al menos un campo para agrupar.")
+if st.session_state.df_data is not None:
+    with st.expander("🔍 Vista previa DATA"):
+        df_data=st.session_state.df_data
+        f1,f2=st.columns([3,1])
+        mix_sel=f1.selectbox("MIX",["Todos"]+sorted(df_data["MIX"].unique().tolist()),
+                             key="prev_mix",label_visibility="collapsed")
+        n_rows=f2.number_input("Filas",5,500,50,key="prev_n",label_visibility="collapsed")
+        prev=df_data if mix_sel=="Todos" else df_data[df_data["MIX"]==mix_sel]
+        st.dataframe(prev.head(n_rows),use_container_width=True,height=220)
+
+    with st.expander("📊 Resumen dinámico de DATA"):
+        df_data=st.session_state.df_data
+        # Available grouping columns
+        GROUP_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO",
+                                 "MIX","PRIORIDAD","ANCHO.F.C","ANCHO.F.M","LNK"]
+                    if c in df_data.columns]
+        # Metric options
+        METRIC_OPTS={"LBS (TOTAL)":"TOTAL","Docenas (CONSUMO_C)":"CONSUMO_C"}
+        valid_metrics={k:v for k,v in METRIC_OPTS.items() if v in df_data.columns}
+
+        rc1,rc2,rc3=st.columns([3,3,2])
+        with rc1:
+            group_sel=st.multiselect(
+                "Agrupar por",GROUP_OPTS,
+                default=[GROUP_OPTS[0]] if GROUP_OPTS else [],
+                key="rsm_group",
+                help="Selecciona uno o más campos para agrupar"
+            )
+        with rc2:
+            metric_sel=st.selectbox(
+                "Métrica",list(valid_metrics.keys()),key="rsm_metric"
+            )
+        with rc3:
+            top_n=st.number_input("Top N filas",min_value=5,max_value=500,value=50,step=5,key="rsm_n")
+
+        if group_sel and metric_sel:
+            metric_col=valid_metrics[metric_sel]
+            try:
+                rsm=df_data.groupby(group_sel,as_index=False)[metric_col].sum()
+                rsm=rsm.sort_values(metric_col,ascending=False).head(top_n)
+                rsm[metric_col]=rsm[metric_col].round(1)
+                rsm.columns=group_sel+[metric_sel]
+                # % del total
+                total_metric=df_data[metric_col].sum()
+                rsm["% del Total"]=(rsm[metric_sel]/total_metric*100).round(1) if total_metric>0 else 0
+                st.dataframe(rsm,use_container_width=True,height=min(60+35*len(rsm),400),
+                             hide_index=True)
+                st.caption(f"Total {metric_sel}: {df_data[metric_col].sum():,.1f} · Mostrando top {len(rsm)} de {len(df_data.groupby(group_sel))} grupos")
+            except Exception as e:
+                st.error(f"Error al agrupar: {e}")
+        else:
+            st.info("Selecciona al menos un campo para agrupar.")
 
 # ── Sección 2: Capacidad ──────────────────────────────────────────────────
-with st.expander("📋  Sección 2 — Capacidad y Validación", expanded=False):
-    st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
-                'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
-                unsafe_allow_html=True)
+st.markdown("### 📋 Sección 2 — Capacidad y Validación")
+st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
+            'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
+            unsafe_allow_html=True)
 
-    tbl_cap=get_tbl("tbl_capacidades",empty_cap)
+tbl_cap=get_tbl("tbl_capacidades",empty_cap)
 
-    # Toggle vista básica / avanzada
-    _vista_avanzada = st.checkbox("Mostrar parámetros avanzados por categoría",
-                                   value=False, key="cap_vista_avanzada")
+# Toggle vista básica / avanzada
+_vista_avanzada = st.checkbox("Mostrar parámetros avanzados por categoría",
+                               value=False, key="cap_vista_avanzada")
 
-    # Columnas básicas siempre visibles
-    _basic_cols = ["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX"]
-    # Columnas avanzadas solo en vista avanzada
-    _adv_cols   = ["MIN_DIFF","MAX_DIFF","MAX_WIDTHS","MAX_SKU","WIDTHS_TARGET_ORDER",
-                   "OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR","MAX_SALTO_RANGO",
-                   "SCRAP_REMAINDER","APPLY_RULES_BLEACH","SPLIT_MIN_LBS",
-                   "OVERSHOOT_TOL_PCT","UNDERSHOOT_TOL_PCT"]
-    _show_cols  = _basic_cols + (_adv_cols if _vista_avanzada else [])
-    _tbl_show   = tbl_cap[[c for c in _show_cols if c in tbl_cap.columns]].copy()
+# Columnas básicas siempre visibles
+_basic_cols = ["CATEGORIA","MINIMO","MAXIMO","CAPACIDAD","MIX"]
+# Columnas avanzadas solo en vista avanzada
+_adv_cols   = ["MIN_DIFF","MAX_DIFF","MAX_WIDTHS","MAX_SKU","WIDTHS_TARGET_ORDER",
+               "OVERSHOOT","UNDERSHOOT","PERMITIR_RANGO_SUPERIOR","MAX_SALTO_RANGO",
+               "SCRAP_REMAINDER","APPLY_RULES_BLEACH","SPLIT_MIN_LBS",
+               "OVERSHOOT_TOL_PCT","UNDERSHOOT_TOL_PCT"]
+_show_cols  = _basic_cols + (_adv_cols if _vista_avanzada else [])
+_tbl_show   = tbl_cap[[c for c in _show_cols if c in tbl_cap.columns]].copy()
 
-    # Height: 7 rows basic, 10 rows advanced
-    h = 310 if not _vista_avanzada else max(415, min(60+35*max(len(tbl_cap),1),600))
+# Height: 7 rows basic, 10 rows advanced
+h = 310 if not _vista_avanzada else max(415, min(60+35*max(len(tbl_cap),1),600))
 
-    _col_cfg_basic = {
-        "CATEGORIA": st.column_config.TextColumn("Categoría", width="small"),
-        "MINIMO":    st.column_config.NumberColumn("Mín LBS",  format="%d"),
-        "MAXIMO":    st.column_config.NumberColumn("Máx LBS",  format="%d"),
-        "CAPACIDAD": st.column_config.NumberColumn("Capacidad Total", format="%d"),
-        "MIX":       st.column_config.SelectboxColumn("MIX", options=["DYE","BLEACH"]),
-    }
-    _col_cfg_adv = {
-        "MIN_DIFF":   st.column_config.NumberColumn("Min Diff", format="%.1f"),
-        "MAX_DIFF":   st.column_config.NumberColumn("Max Diff", format="%.1f"),
-        "MAX_WIDTHS": st.column_config.NumberColumn("Max Anchos", format="%d"),
-        "MAX_SKU":    st.column_config.NumberColumn("Max SKU", format="%d"),
-        "WIDTHS_TARGET_ORDER": st.column_config.TextColumn("Orden Anchos"),
-        "OVERSHOOT":  st.column_config.CheckboxColumn("Overshoot"),
-        "UNDERSHOOT": st.column_config.CheckboxColumn("Undershoot"),
-        "PERMITIR_RANGO_SUPERIOR": st.column_config.CheckboxColumn("Rango Sup."),
-        "MAX_SALTO_RANGO": st.column_config.NumberColumn("Max Salto", format="%d"),
-        "SCRAP_REMAINDER":  st.column_config.CheckboxColumn("Scrap"),
-        "APPLY_RULES_BLEACH": st.column_config.CheckboxColumn("Bleach"),
-        "SPLIT_MIN_LBS":    st.column_config.NumberColumn("Split Min", format="%d"),
-        "OVERSHOOT_TOL_PCT": st.column_config.NumberColumn("Tol Over%", format="%.1f%%"),
-        "UNDERSHOOT_TOL_PCT":st.column_config.NumberColumn("Tol Under%",format="%.1f%%"),
-    }
-    _col_cfg = {**_col_cfg_basic, **(_col_cfg_adv if _vista_avanzada else {})}
+_col_cfg_basic = {
+    "CATEGORIA": st.column_config.TextColumn("Categoría", width="small"),
+    "MINIMO":    st.column_config.NumberColumn("Mín LBS",  format="%d"),
+    "MAXIMO":    st.column_config.NumberColumn("Máx LBS",  format="%d"),
+    "CAPACIDAD": st.column_config.NumberColumn("Capacidad Total", format="%d"),
+    "MIX":       st.column_config.SelectboxColumn("MIX", options=["DYE","BLEACH"]),
+}
+_col_cfg_adv = {
+    "MIN_DIFF":   st.column_config.NumberColumn("Min Diff", format="%.1f"),
+    "MAX_DIFF":   st.column_config.NumberColumn("Max Diff", format="%.1f"),
+    "MAX_WIDTHS": st.column_config.NumberColumn("Max Anchos", format="%d"),
+    "MAX_SKU":    st.column_config.NumberColumn("Max SKU", format="%d"),
+    "WIDTHS_TARGET_ORDER": st.column_config.TextColumn("Orden Anchos"),
+    "OVERSHOOT":  st.column_config.CheckboxColumn("Overshoot"),
+    "UNDERSHOOT": st.column_config.CheckboxColumn("Undershoot"),
+    "PERMITIR_RANGO_SUPERIOR": st.column_config.CheckboxColumn("Rango Sup."),
+    "MAX_SALTO_RANGO": st.column_config.NumberColumn("Max Salto", format="%d"),
+    "SCRAP_REMAINDER":  st.column_config.CheckboxColumn("Scrap"),
+    "APPLY_RULES_BLEACH": st.column_config.CheckboxColumn("Bleach"),
+    "SPLIT_MIN_LBS":    st.column_config.NumberColumn("Split Min", format="%d"),
+    "OVERSHOOT_TOL_PCT": st.column_config.NumberColumn("Tol Over%", format="%.1f%%"),
+    "UNDERSHOOT_TOL_PCT":st.column_config.NumberColumn("Tol Under%",format="%.1f%%"),
+}
+_col_cfg = {**_col_cfg_basic, **(_col_cfg_adv if _vista_avanzada else {})}
 
-    cap_ed=st.data_editor(
-        _tbl_show, num_rows="dynamic", use_container_width=True, height=h,
-        key=f'editor_cap_{st.session_state["tbl_version"]}{"_adv" if _vista_avanzada else "_bas"}',
-        column_config=_col_cfg,
-    )
-    # Merge edited basic cols back into full table
-    if not _vista_avanzada:
-        _full = tbl_cap.copy()
-        for c in _basic_cols:
-            if c in cap_ed.columns and c in _full.columns:
-                # align by position (same rows)
-                _full = _full.reset_index(drop=True)
-                cap_ed = cap_ed.reset_index(drop=True)
-                _full[c] = cap_ed[c]
-        # Handle added/deleted rows: if cap_ed has more rows, append with defaults
-        if len(cap_ed) != len(_full):
-            cap_ed_full = cap_ed.copy()
-            for c in _adv_cols:
-                if c not in cap_ed_full.columns:
-                    cap_ed_full[c] = CAP_DEFAULTS.get(c, None)
-            _full = cap_ed_full
-        cap_ed = _full
+cap_ed=st.data_editor(
+    _tbl_show, num_rows="dynamic", use_container_width=True, height=h,
+    key=f'editor_cap_{st.session_state["tbl_version"]}{"_adv" if _vista_avanzada else "_bas"}',
+    column_config=_col_cfg,
+)
+# Merge edited basic cols back into full table
+if not _vista_avanzada:
+    _full = tbl_cap.copy()
+    for c in _basic_cols:
+        if c in cap_ed.columns and c in _full.columns:
+            # align by position (same rows)
+            _full = _full.reset_index(drop=True)
+            cap_ed = cap_ed.reset_index(drop=True)
+            _full[c] = cap_ed[c]
+    # Handle added/deleted rows: if cap_ed has more rows, append with defaults
+    if len(cap_ed) != len(_full):
+        cap_ed_full = cap_ed.copy()
+        for c in _adv_cols:
+            if c not in cap_ed_full.columns:
+                cap_ed_full[c] = CAP_DEFAULTS.get(c, None)
+        _full = cap_ed_full
+    cap_ed = _full
 
-    b_col,s_col=st.columns([1,3])
-    with b_col:
-        if st.button("✅ Aplicar cambios de capacidad",type="primary",use_container_width=True):
-            # FIX: guardamos cap_ed (ediciones del usuario en pantalla)
-            # pero si hay un perfil recién cargado (tbl_version cambió),
-            # cap_ed ya contiene los datos del perfil correctamente.
-            # Guardamos siempre lo que el editor muestra.
-            st.session_state.tbl_capacidades = cap_ed
-            st.session_state.cap_applied = True
-            # NO bumpeamos version aquí — solo guardamos y confirmamos
-            st.rerun()
-    with s_col:
-        if st.session_state.cap_applied:
-            cap_ok=get_tbl("tbl_capacidades",empty_cap)
-            if not cap_ok.empty:
-                tot=pd.to_numeric(cap_ok["CAPACIDAD"],errors="coerce").sum()
-                inv=cap_ok[["MINIMO","MAXIMO","CAPACIDAD"]].isna().any(axis=1).sum()
-                st.caption(f"{'⚠️' if inv else '✅'} {len(cap_ok)} categorías · "
-                           f"Capacidad total: **{fmt(tot)} LBS**"
-                           f"{' · ⚠️ Filas incompletas: '+str(inv) if inv else ''}")
-        else:
-            st.caption("ℹ️ Edita y presiona Aplicar para habilitar el loteo.")
-
-    # Pre-check de factibilidad
-    if st.session_state.cap_applied and st.session_state.df_data is not None:
-        df_data=st.session_state.df_data
+b_col,s_col=st.columns([1,3])
+with b_col:
+    if st.button("✅ Aplicar cambios de capacidad",type="primary",use_container_width=True):
+        # FIX: guardamos cap_ed (ediciones del usuario en pantalla)
+        # pero si hay un perfil recién cargado (tbl_version cambió),
+        # cap_ed ya contiene los datos del perfil correctamente.
+        # Guardamos siempre lo que el editor muestra.
+        st.session_state.tbl_capacidades = cap_ed
+        st.session_state.cap_applied = True
+        # NO bumpeamos version aquí — solo guardamos y confirmamos
+        st.rerun()
+with s_col:
+    if st.session_state.cap_applied:
         cap_ok=get_tbl("tbl_capacidades",empty_cap)
         if not cap_ok.empty:
-            st.markdown("**Pre-check de factibilidad:**")
-            for mix_v in df_data["MIX"].unique():
-                lbs_disp=df_data[df_data["MIX"]==mix_v]["TOTAL"].sum()
-                cap_rows=cap_ok[cap_ok["MIX"]==mix_v]
-                lbs_cap=pd.to_numeric(cap_rows["CAPACIDAD"],errors="coerce").sum() if not cap_rows.empty else 0
-                gap=lbs_cap-lbs_disp
-                if gap>=0:
-                    st.caption(f"✅ {mix_v}: {fmt(lbs_disp)} LBS disponibles | {fmt(lbs_cap)} LBS capacidad → Capacidad suficiente (+{fmt(gap)})")
-                else:
-                    st.caption(f"⚠️ {mix_v}: {fmt(lbs_disp)} LBS disponibles | {fmt(lbs_cap)} LBS capacidad → {fmt(-gap)} LBS sin capacidad")
+            tot=pd.to_numeric(cap_ok["CAPACIDAD"],errors="coerce").sum()
+            inv=cap_ok[["MINIMO","MAXIMO","CAPACIDAD"]].isna().any(axis=1).sum()
+            st.caption(f"{'⚠️' if inv else '✅'} {len(cap_ok)} categorías · "
+                       f"Capacidad total: **{fmt(tot)} LBS**"
+                       f"{' · ⚠️ Filas incompletas: '+str(inv) if inv else ''}")
+    else:
+        st.caption("ℹ️ Edita y presiona Aplicar para habilitar el loteo.")
+
+# Pre-check de factibilidad
+if st.session_state.cap_applied and st.session_state.df_data is not None:
+    df_data=st.session_state.df_data
+    cap_ok=get_tbl("tbl_capacidades",empty_cap)
+    if not cap_ok.empty:
+        st.markdown("**Pre-check de factibilidad:**")
+        for mix_v in df_data["MIX"].unique():
+            lbs_disp=df_data[df_data["MIX"]==mix_v]["TOTAL"].sum()
+            cap_rows=cap_ok[cap_ok["MIX"]==mix_v]
+            lbs_cap=pd.to_numeric(cap_rows["CAPACIDAD"],errors="coerce").sum() if not cap_rows.empty else 0
+            gap=lbs_cap-lbs_disp
+            if gap>=0:
+                st.caption(f"✅ {mix_v}: {fmt(lbs_disp)} LBS disponibles | {fmt(lbs_cap)} LBS capacidad → Capacidad suficiente (+{fmt(gap)})")
+            else:
+                st.caption(f"⚠️ {mix_v}: {fmt(lbs_disp)} LBS disponibles | {fmt(lbs_cap)} LBS capacidad → {fmt(-gap)} LBS sin capacidad")
 
 
 # _ql ya viene del sidebar (quality_slider en sidebar)
@@ -766,125 +766,125 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
 
 
 # (seccion_solver)
-with st.expander("⚗️  Sección 5 — LOTEO", expanded=False):
-  # ── Botón principal ────────────────────────────────────────────────────────
+st.markdown("### ⚗️ Sección 5 — Loteo")
+# ── Botón principal ────────────────────────────────────────────────────────
 #  st.divider()
-  can_run=(st.session_state.df_data is not None and
-           st.session_state.raw_file_bytes is not None and
-           st.session_state.cap_applied)
-  
-  if not can_run:
-      tips=[]
-      if st.session_state.df_data is None:   tips.append("📁 Sube un archivo Excel")
-      if not st.session_state.cap_applied:   tips.append("📋 Aplica cambios de capacidad (Sección 2)")
-      st.info("  ·  ".join(tips))
-  
-  run_comment=st.text_input("💬 Comentario para esta corrida (opcional)",
-                             placeholder="ej. Prueba calidad 10 con nuevas capacidades",
-                             key="run_comment")
-  
-  btn_col,cancel_col=st.columns([3,1])
-  with btn_col:
-      run_btn=st.button("▶  Correr Loteo",type="primary",use_container_width=True,disabled=not can_run)
-  with cancel_col:
-      if st.button("⏹ Cancelar",use_container_width=True,disabled=not st.session_state.running):
-          st.session_state.cancel_flag[0]=True
-  
-  # ── Ejecución ──────────────────────────────────────────────────────────────
-  if run_btn and can_run:
-      st.session_state.cancel_flag=[False]
-      st.session_state.running=True
-      all_overrides={**adv_overrides,**section3_overrides}
-      _run_start = datetime.now()
-  
-      with st.spinner("Preparando parámetros…"):
-          try:
-              df_data2,df_cap2,params2,_=load_inputs(io.BytesIO(st.session_state.raw_file_bytes),
-                                                      param_overrides=all_overrides)
-              # Parámetros que el loader no conoce → aplicar directamente sobre params2
-              params2["QUALITY_LEVEL"]          = int(all_overrides.get("QUALITY_LEVEL", 5))
-              params2["BEAM_WIDTH"]             = quality_to_beam(params2["QUALITY_LEVEL"])
-              params2["LOOKAHEAD_VENCIDOS"]     = int(all_overrides.get("LOOKAHEAD_VENCIDOS", 1))
-              params2["PREFERIR_LOTES_SIMPLES"] = int(all_overrides.get("PREFERIR_LOTES_SIMPLES", 0))
-              params2["PENALIZACION_ANCHO_EXTRA"]= float(all_overrides.get("PENALIZACION_ANCHO_EXTRA", 1.5))
-              params2["PENALIZACION_LNK_EXTRA"]  = float(all_overrides.get("PENALIZACION_LNK_EXTRA", 0.8))
-              params2["OVERSHOOT_ENABLE"]        = int(all_overrides.get("OVERSHOOT_ENABLE", 1))
-              params2["UNDERSHOOT_ENABLE"]       = int(all_overrides.get("UNDERSHOOT_ENABLE", 1))
-              params2["OVERSHOOT_TOL_PCT_SMALL"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_SMALL", 0.05))
-              params2["OVERSHOOT_TOL_PCT_LARGE"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_LARGE", 0.02))
-              params2["OVERSHOOT_SMALL_THRESHOLD"]= float(all_overrides.get("OVERSHOOT_SMALL_THRESHOLD", 5000))
-  
-              cap_ui=get_tbl("tbl_capacidades",empty_cap)
-              if not cap_ui.empty:
-                  for c in ["MINIMO","MAXIMO","CAPACIDAD"]:
-                      cap_ui[c]=pd.to_numeric(cap_ui[c],errors="coerce")
-                  df_cap2=cap_ui.dropna(subset=["MINIMO","MAXIMO","CAPACIDAD"]).copy()
-              params2=rebuild_params(params2)
-          except Exception as e:
-              st.error(f"Error: {e}"); st.session_state.running=False; st.stop()
-  
-      prog=st.progress(0,text="Iniciando…")
-      stat=st.empty()
-  
-      _lbs_plan_total = float(df_data2["TOTAL"].sum()) if not df_data2.empty else 0.0
-  
-      def cb(pct,msg,stats):
-          prog.progress(min(pct,0.99),text=msg)
-          lbs_asig  = float(stats.get('lbs', 0))
-          pct_asig  = (lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0.0
-          _elapsed  = (datetime.now() - _run_start).seconds
-          _mins, _secs = divmod(_elapsed, 60)
-          stat.markdown(
-              f"**Grupo** {stats['grupo']}/{stats['total']} · "
-              f"**Lotes:** {stats['lotes']:,} · "
-              f"**LBS Plan:** {fmt(_lbs_plan_total)} · "
-              f"**LBS Asignadas:** {fmt(lbs_asig)} · "
-              f"**% Asignado:** {pct_asig:.1f}% · "
-              f"**Tiempo:** {_mins:02d}:{_secs:02d}"
-          )
-  
+can_run=(st.session_state.df_data is not None and
+       st.session_state.raw_file_bytes is not None and
+       st.session_state.cap_applied)
+
+if not can_run:
+  tips=[]
+  if st.session_state.df_data is None:   tips.append("📁 Sube un archivo Excel")
+  if not st.session_state.cap_applied:   tips.append("📋 Aplica cambios de capacidad (Sección 2)")
+  st.info("  ·  ".join(tips))
+
+run_comment=st.text_input("💬 Comentario para esta corrida (opcional)",
+                         placeholder="ej. Prueba calidad 10 con nuevas capacidades",
+                         key="run_comment")
+
+btn_col,cancel_col=st.columns([3,1])
+with btn_col:
+  run_btn=st.button("▶  Correr Loteo",type="primary",use_container_width=True,disabled=not can_run)
+with cancel_col:
+  if st.button("⏹ Cancelar",use_container_width=True,disabled=not st.session_state.running):
+      st.session_state.cancel_flag[0]=True
+
+# ── Ejecución ──────────────────────────────────────────────────────────────
+if run_btn and can_run:
+  st.session_state.cancel_flag=[False]
+  st.session_state.running=True
+  all_overrides={**adv_overrides,**section3_overrides}
+  _run_start = datetime.now()
+
+  with st.spinner("Preparando parámetros…"):
       try:
-          # Validar modo restricción antes de correr
-          _dispon = None
-          if st.session_state.modo_restriccion:
-              if st.session_state.dispon_index is None:
-                  st.error("⚠️ Modo Restricción activo pero no hay ANALISIS_INV cargado. "
-                           "Sube el archivo en el sidebar antes de ejecutar.")
-                  st.session_state.running = False
-                  st.stop()
-              _dispon = st.session_state.dispon_index
-  
-          df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock=run_loteo(
-              df_data2,df_cap2,params2,progress_callback=cb,
-              cancel_flag=st.session_state.cancel_flag,
-              dispon_index=_dispon)
-          _elapsed_total = (datetime.now() - _run_start).seconds
-          _tm, _ts = divmod(_elapsed_total, 60)
-          if cancelled:
-              prog.progress(1.0,text=f"⏹ Cancelado — resultados parciales ({_tm:02d}:{_ts:02d})")
-          else:
-              prog.progress(1.0,text=f"✅ Loteo completado en {_tm:02d}:{_ts:02d}")
-          stat.empty()
+          df_data2,df_cap2,params2,_=load_inputs(io.BytesIO(st.session_state.raw_file_bytes),
+                                                  param_overrides=all_overrides)
+          # Parámetros que el loader no conoce → aplicar directamente sobre params2
+          params2["QUALITY_LEVEL"]          = int(all_overrides.get("QUALITY_LEVEL", 5))
+          params2["BEAM_WIDTH"]             = quality_to_beam(params2["QUALITY_LEVEL"])
+          params2["LOOKAHEAD_VENCIDOS"]     = int(all_overrides.get("LOOKAHEAD_VENCIDOS", 1))
+          params2["PREFERIR_LOTES_SIMPLES"] = int(all_overrides.get("PREFERIR_LOTES_SIMPLES", 0))
+          params2["PENALIZACION_ANCHO_EXTRA"]= float(all_overrides.get("PENALIZACION_ANCHO_EXTRA", 1.5))
+          params2["PENALIZACION_LNK_EXTRA"]  = float(all_overrides.get("PENALIZACION_LNK_EXTRA", 0.8))
+          params2["OVERSHOOT_ENABLE"]        = int(all_overrides.get("OVERSHOOT_ENABLE", 1))
+          params2["UNDERSHOOT_ENABLE"]       = int(all_overrides.get("UNDERSHOOT_ENABLE", 1))
+          params2["OVERSHOOT_TOL_PCT_SMALL"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_SMALL", 0.05))
+          params2["OVERSHOOT_TOL_PCT_LARGE"] = float(all_overrides.get("OVERSHOOT_TOL_PCT_LARGE", 0.02))
+          params2["OVERSHOOT_SMALL_THRESHOLD"]= float(all_overrides.get("OVERSHOOT_SMALL_THRESHOLD", 5000))
+
+          cap_ui=get_tbl("tbl_capacidades",empty_cap)
+          if not cap_ui.empty:
+              for c in ["MINIMO","MAXIMO","CAPACIDAD"]:
+                  cap_ui[c]=pd.to_numeric(cap_ui[c],errors="coerce")
+              df_cap2=cap_ui.dropna(subset=["MINIMO","MAXIMO","CAPACIDAD"]).copy()
+          params2=rebuild_params(params2)
       except Exception as e:
-          st.error(f"Error en loteo: {e}"); st.session_state.running=False; st.stop()
-  
-      result={"ts":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-              "label":datetime.now().strftime("%H:%M:%S"),
-              "comentario":st.session_state.get("run_comment",""),
-              "quality_used":_ql,
-              "tiempo_seg": (datetime.now()-_run_start).seconds,
-              "modo": "Restricción" if st.session_state.modo_restriccion else "Libre",
-              "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
-              "params_out":df_par,
-              "detalle_tejido":df_tej,"stock_tejido":df_stock,
-              "reports":build_reports(df_data2,df_cap2,df_det,df_res),
-              "cancelled":cancelled}
-      st.session_state.last_result=result
-      h=st.session_state.run_history; h.append(result)
-      if len(h)>5: h.pop(0)
-      st.session_state.run_history=h
-      st.session_state.running=False
-      st.rerun()
+          st.error(f"Error: {e}"); st.session_state.running=False; st.stop()
+
+  prog=st.progress(0,text="Iniciando…")
+  stat=st.empty()
+
+  _lbs_plan_total = float(df_data2["TOTAL"].sum()) if not df_data2.empty else 0.0
+
+  def cb(pct,msg,stats):
+      prog.progress(min(pct,0.99),text=msg)
+      lbs_asig  = float(stats.get('lbs', 0))
+      pct_asig  = (lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0.0
+      _elapsed  = (datetime.now() - _run_start).seconds
+      _mins, _secs = divmod(_elapsed, 60)
+      stat.markdown(
+          f"**Grupo** {stats['grupo']}/{stats['total']} · "
+          f"**Lotes:** {stats['lotes']:,} · "
+          f"**LBS Plan:** {fmt(_lbs_plan_total)} · "
+          f"**LBS Asignadas:** {fmt(lbs_asig)} · "
+          f"**% Asignado:** {pct_asig:.1f}% · "
+          f"**Tiempo:** {_mins:02d}:{_secs:02d}"
+      )
+
+  try:
+      # Validar modo restricción antes de correr
+      _dispon = None
+      if st.session_state.modo_restriccion:
+          if st.session_state.dispon_index is None:
+              st.error("⚠️ Modo Restricción activo pero no hay ANALISIS_INV cargado. "
+                       "Sube el archivo en el sidebar antes de ejecutar.")
+              st.session_state.running = False
+              st.stop()
+          _dispon = st.session_state.dispon_index
+
+      df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock=run_loteo(
+          df_data2,df_cap2,params2,progress_callback=cb,
+          cancel_flag=st.session_state.cancel_flag,
+          dispon_index=_dispon)
+      _elapsed_total = (datetime.now() - _run_start).seconds
+      _tm, _ts = divmod(_elapsed_total, 60)
+      if cancelled:
+          prog.progress(1.0,text=f"⏹ Cancelado — resultados parciales ({_tm:02d}:{_ts:02d})")
+      else:
+          prog.progress(1.0,text=f"✅ Loteo completado en {_tm:02d}:{_ts:02d}")
+      stat.empty()
+  except Exception as e:
+      st.error(f"Error en loteo: {e}"); st.session_state.running=False; st.stop()
+
+  result={"ts":datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          "label":datetime.now().strftime("%H:%M:%S"),
+          "comentario":st.session_state.get("run_comment",""),
+          "quality_used":_ql,
+          "tiempo_seg": (datetime.now()-_run_start).seconds,
+          "modo": "Restricción" if st.session_state.modo_restriccion else "Libre",
+          "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
+          "params_out":df_par,
+          "detalle_tejido":df_tej,"stock_tejido":df_stock,
+          "reports":build_reports(df_data2,df_cap2,df_det,df_res),
+          "cancelled":cancelled}
+  st.session_state.last_result=result
+  h=st.session_state.run_history; h.append(result)
+  if len(h)>5: h.pop(0)
+  st.session_state.run_history=h
+  st.session_state.running=False
+  st.rerun()
 
 # ── Resultados (fuera del expander, nivel raíz) ────────────────────────────
 if st.session_state.last_result is None: st.stop()
@@ -1301,4 +1301,7 @@ st.download_button("⬇  Descargar Excel completo",data=export_excel(res),
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
 
-
+with st.expander("📋  Sección prueba", expanded=True):
+    st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
+                'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
+                unsafe_allow_html=True)
