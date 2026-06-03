@@ -1300,4 +1300,4 @@ with st.expander("⚗️  Sección 5 — LOTEO", expanded=True):
                      file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      use_container_width=True)
-with st.expander("⚗️  Sección 6 — Prueba", expanded=false):
+  with st.expander("⚗️  Sección 6 — Prueba", expanded=false):
