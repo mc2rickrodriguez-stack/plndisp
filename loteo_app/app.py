@@ -1271,6 +1271,16 @@ with tab_t:
             if _dias_f and "DIA_LOTE" in df_tej_f.columns:
                 df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
 
+            # Columna LBS_TOTAL_LOTE: suma de todas las LBS asignadas del lote
+            lbs_por_lote = df_tej_f.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
+            df_tej_f = df_tej_f.merge(lbs_por_lote, on="LOTE_ID", how="left")
+            # Moverla justo después de LBS_ASIGNADAS
+            cols = list(df_tej_f.columns)
+            if "LBS_TOTAL_LOTE" in cols and "LBS_ASIGNADAS" in cols:
+                cols.remove("LBS_TOTAL_LOTE")
+                cols.insert(cols.index("LBS_ASIGNADAS") + 1, "LBS_TOTAL_LOTE")
+                df_tej_f = df_tej_f[cols]
+
             st.caption(f"{len(df_tej_f):,} filas · {df_tej_f['LOTE_ID'].nunique():,} lotes")
             st.dataframe(df_tej_f, use_container_width=True, height=420)
 
