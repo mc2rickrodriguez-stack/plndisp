@@ -5,14 +5,6 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-# ── VERSION FINGERPRINT (diagnóstico) ─────────────────────────────────────
-import inspect
-from engine import loteo as _loteo_mod
-_LOTEO_FILE = inspect.getfile(_loteo_mod)
-_HAS_PREFILTER = hasattr(_loteo_mod, '__file__') and 'lnks_sin_dispon' in open(_loteo_mod.__file__).read()
-# ──────────────────────────────────────────────────────────────────────────
-
 from engine.loader import load_inputs
 from engine.loteo  import run_loteo, build_reports, quality_to_beam, DESCARTE_MSGS
 from engine.disponibilidad import load_disponibilidad
@@ -285,6 +277,8 @@ def export_excel(result):
         df_stk = result.get("stock_tejido",   pd.DataFrame())
         if not df_tej.empty: df_tej.to_excel(w,index=False,sheet_name="DETALLE_TEJIDO")
         if not df_stk.empty: df_stk.to_excel(w,index=False,sheet_name="STOCK_TEJIDO")
+        df_oci = result.get("tejido_ocioso", pd.DataFrame())
+        if not df_oci.empty: df_oci.to_excel(w,index=False,sheet_name="TEJIDO_SIN_DEMANDA")
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -292,12 +286,6 @@ def export_excel(result):
 # ══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("🧶 NV2 Loteo")
-    # ── Diagnóstico de versión ──────────────────────────────────────────
-    if _HAS_PREFILTER:
-        st.success("✅ v5 activa — pre-filtro tejido OK")
-    else:
-        st.error(f"❌ loteo.py SIN pre-filtro — archivo: {_LOTEO_FILE}")
-    # ───────────────────────────────────────────────────────────────────
     st.divider()
 
     # ── Modo de loteo ──────────────────────────────────────────────────────
@@ -868,7 +856,7 @@ if run_btn and can_run:
               st.stop()
           _dispon = st.session_state.dispon_index
 
-      df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock=run_loteo(
+      df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock,df_ocioso=run_loteo(
           df_data2,df_cap2,params2,progress_callback=cb,
           cancel_flag=st.session_state.cancel_flag,
           dispon_index=_dispon)
@@ -891,6 +879,7 @@ if run_btn and can_run:
           "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
           "params_out":df_par,
           "detalle_tejido":df_tej,"stock_tejido":df_stock,
+          "tejido_ocioso":df_ocioso,
           "reports":build_reports(df_data2,df_cap2,df_det,df_res),
           "cancelled":cancelled}
   st.session_state.last_result=result
@@ -1213,6 +1202,7 @@ with tab_e:
 with tab_t:
     df_tej = res.get("detalle_tejido", pd.DataFrame())
     df_stk = res.get("stock_tejido",   pd.DataFrame())
+    df_oci = res.get("tejido_ocioso",  pd.DataFrame())
 
     if res.get("modo","Libre") == "Libre":
         st.info("ℹ️ Este resultado se generó en **Modo Libre**. "
@@ -1236,7 +1226,7 @@ with tab_t:
         mc3.metric("Día más tardío del plan",     label_dia)
 
         # ── Sub-tabs ──────────────────────────────────────────────────────
-        st1, st2 = st.tabs(["📦 Detalle por lote/componente", "📊 Stock de tejido"])
+        st1, st2, st3 = st.tabs(["📦 Detalle por lote/componente", "📊 Stock de tejido", "⚠️ Tejido sin requerimiento"])
 
         with st1:
             st.caption("Una fila por cada componente de tejido asignado a un lote.")
@@ -1285,15 +1275,26 @@ with tab_t:
             if _dias_f and "DIA_LOTE" in df_tej_f.columns:
                 df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
 
-            # Columna LBS_TOTAL_LOTE: suma de todas las LBS asignadas del lote
+            # Columna LBS_TOTAL_LOTE
             lbs_por_lote = df_tej_f.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
             df_tej_f = df_tej_f.merge(lbs_por_lote, on="LOTE_ID", how="left")
-            # Moverla justo después de LBS_ASIGNADAS
+
+            # Columna PRIORIDAD — tomada del DETALLE_LOTES (bloque dominante del lote)
+            if not df_det.empty and "LOTE_ID" in df_det.columns and "BLOQUE" in df_det.columns:
+                prio_map = (
+                    df_det.groupby("LOTE_ID")["BLOQUE"]
+                    .agg(lambda x: x.value_counts().idxmax())
+                    .rename("PRIORIDAD_LOTE")
+                )
+                df_tej_f = df_tej_f.merge(prio_map, on="LOTE_ID", how="left")
+
+            # Reordenar columnas: LBS_TOTAL_LOTE y PRIORIDAD_LOTE junto a LBS_ASIGNADAS
             cols = list(df_tej_f.columns)
-            if "LBS_TOTAL_LOTE" in cols and "LBS_ASIGNADAS" in cols:
-                cols.remove("LBS_TOTAL_LOTE")
-                cols.insert(cols.index("LBS_ASIGNADAS") + 1, "LBS_TOTAL_LOTE")
-                df_tej_f = df_tej_f[cols]
+            for col in ["LBS_TOTAL_LOTE", "PRIORIDAD_LOTE"]:
+                if col in cols and "LBS_ASIGNADAS" in cols:
+                    cols.remove(col)
+                    cols.insert(cols.index("LBS_ASIGNADAS") + 1, col)
+            df_tej_f = df_tej_f[cols]
 
             st.caption(f"{len(df_tej_f):,} filas · {df_tej_f['LOTE_ID'].nunique():,} lotes")
             st.dataframe(df_tej_f, use_container_width=True, height=420)
@@ -1317,6 +1318,36 @@ with tab_t:
                 use_container_width=True,
                 height=500,
             )
+
+        with st3:
+            st.caption(
+                "Tejido planeado o en inventario en ANALISIS_INV que **no tiene demanda** "
+                "en el plan mensual actual. Útil para detectar producción de tejido innecesaria."
+            )
+            if df_oci.empty:
+                st.success("✅ Todo el tejido en ANALISIS_INV tiene demanda en el plan mensual.")
+            else:
+                # Métricas
+                oc1, oc2, oc3 = st.columns(3)
+                oc1.metric("Estilos sin demanda",  df_oci["ESTILO C"].nunique())
+                oc2.metric("Registros",            len(df_oci))
+                oc3.metric("LBS totales ociosas",  f"{df_oci['LBS_TOTAL'].sum():,.0f}")
+
+                # Filtros
+                of1, of2 = st.columns(2)
+                _oc_estilos = of1.multiselect("ESTILO C", sorted(df_oci["ESTILO C"].unique()), key="oc_estilo")
+                _oc_lf      = of2.multiselect("LOTE FACE", sorted(df_oci["LOTE FACE"].unique()), key="oc_lf")
+
+                df_oci_f = df_oci.copy()
+                if _oc_estilos: df_oci_f = df_oci_f[df_oci_f["ESTILO C"].isin(_oc_estilos)]
+                if _oc_lf:      df_oci_f = df_oci_f[df_oci_f["LOTE FACE"].isin(_oc_lf)]
+
+                # Mostrar DIA cols solo si tienen datos
+                dia_cols_show = ["INV MANO"] + [f"DIA {i}" for i in range(1,11) if f"DIA {i}" in df_oci_f.columns and df_oci_f[f"DIA {i}"].sum()>0]
+                cols_oci = ["ESTILO C","DG","LOTE FACE"] + dia_cols_show + ["LBS_TOTAL"]
+                cols_oci = [c for c in cols_oci if c in df_oci_f.columns]
+
+                st.dataframe(df_oci_f[cols_oci], use_container_width=True, height=480)
 
 st.divider()
 ts=res["ts"].replace(":","").replace(" ","_").replace("-","")
