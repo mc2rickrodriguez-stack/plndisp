@@ -885,422 +885,422 @@ with st.expander("⚗️  Sección 5 — LOTEO", expanded=True):
       st.session_state.run_history=h
       st.session_state.running=False
       st.rerun()
-  
-  # ── Resultados ─────────────────────────────────────────────────────────────
-  if st.session_state.last_result is None: st.stop()
-  
-  st.divider()
-  st.markdown("### 📊 Resultados")
-  
-  # ── Selector de corrida ────────────────────────────────────────────────────
-  _hist = st.session_state.run_history
-  if len(_hist) > 1:
-      _opts = []
-      for i, r in enumerate(_hist):
-          _t = r.get("tiempo_seg",0); _rm,_rs = divmod(int(_t),60)
-          _lbl = (f"#{i+1} · {r['label']} · Calidad {r.get('quality_used','?')} · "
-                  f"{_rm:02d}:{_rs:02d}"
-                  + (f" · 💬 {r['comentario']}" if r.get("comentario") else ""))
-          _opts.append(_lbl)
-      _sel_idx = st.selectbox(
-          "Ver corrida", range(len(_opts)),
-          format_func=lambda i: _opts[i],
-          index=len(_hist)-1,   # última por default
-          key="corrida_sel"
-      )
-      res = _hist[_sel_idx]
-  else:
-      res = st.session_state.last_result
-  
-  df_det=res["detalle"]; df_res=res["resumen"]
-  df_exc=res["excedentes"]; reports=res["reports"]
-  lnk_df=reports.get("LNK_COMPLETITUD",pd.DataFrame())
-  
-  if res.get("cancelled"):
-      st.warning("⚠️ Corrida cancelada — resultados parciales")
-  
-  _modo_badge = res.get("modo","Libre")
-  _badge_color = "#3b82f6" if _modo_badge == "Restricción" else "#16a34a"
-  st.markdown(
-      f'<span style="background:{_badge_color};color:#fff;padding:3px 10px;border-radius:12px;'
-      f'font-size:.82rem;font-weight:600;">Modo: {_modo_badge}</span>',
-      unsafe_allow_html=True,
-  )
-  
-  _comment=res.get("comentario","")
-  _ql_used=res.get("quality_used","?")
-  _t_seg=res.get("tiempo_seg",0)
-  _tm,_ts=divmod(int(_t_seg),60)
-  st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  ·  Tiempo: {_tm:02d}:{_ts:02d}  {'·  💬 '+_comment if _comment else ''}")
-  
-  k1,k2,k3,k4,k5,k6,k7=st.columns(7)
-  _lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
-  _lbs_plan = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
-  _lbs_plan_total = _lbs_plan["LBS_BASE"].sum() if not _lbs_plan.empty and "LBS_BASE" in _lbs_plan.columns else 0
-  _pct_plan = (_lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0
-  k1.metric("Lotes",          f"{len(df_res):,}")
-  k2.metric("LBS Planeadas",  fmt(_lbs_plan_total))
-  k3.metric("LBS Asignadas",  fmt(_lbs_asig))
-  k4.metric("% vs Plan",      f"{_pct_plan:.1f}%")
-  k5.metric("LBS Excedentes", fmt(df_exc["LBS_RESTANTES"].sum() if not df_exc.empty else 0))
-  k6.metric("LNKs completos",
-            f"{(lnk_df['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lnk_df)*100) if not lnk_df.empty else 0:.1f}%")
-  k7.metric("Cap. perdida",   fmt(df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0))
-  
-  tab_g,tab_d,tab_r,tab_l,tab_c,tab_e,tab_t=st.tabs([
-      "📊 Gráficas","📋 Detalle Lotes","📄 Resumen",
-      "🔍 Decision Log","🔁 Comparar Corridas","⚠️ Excedentes",
-      "🧵 Disponibilidad Tejido"])
-  
-  with tab_g:
-      cap_df  = reports.get("CAPACIDAD_X_CATEG", pd.DataFrame())
-      prio_df = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
-  
-      # ── Gráficas existentes ────────────────────────────────────────────────
-      c1,c2=st.columns(2)
-      with c1: st.plotly_chart(chart_capacidad_barras(cap_df), use_container_width=True)
-      with c2: st.plotly_chart(chart_bloques_donut(prio_df),   use_container_width=True)
-      c3,c4=st.columns(2)
-      with c3: st.plotly_chart(chart_heatmap_capacidad(cap_df),  use_container_width=True)
-      with c4: st.plotly_chart(chart_completitud_lnk(lnk_df),    use_container_width=True)
-  
-      st.divider()
-  
-      # ── Donuts: Anchos y LNKs ──────────────────────────────────────────────
-      st.markdown("#### 🍩 Distribución de Lotes")
-  
-      if df_res.empty:
-          st.info("Sin datos de lotes.")
-      else:
-          _f1,_f2,_f3 = st.columns(3)
-          _mix_opts = ["Todos"] + sorted(df_res["MIX"].unique().tolist())
-          _cat_opts = ["Todas"] + sorted(df_res["CATEGORIA"].dropna().unique().tolist())
-          _blq_opts = ["Todos"] + (sorted(df_res["BLOQUE_DOMINANTE"].dropna().unique().tolist()) if "BLOQUE_DOMINANTE" in df_res.columns else [])
-          _f_mix = _f1.selectbox("MIX",       _mix_opts, key="dg_mix")
-          _f_cat = _f2.selectbox("Categoría", _cat_opts, key="dg_cat")
-          _f_blq = _f3.selectbox("Bloque",    ["Todos"]+_blq_opts, key="dg_blq")
-  
-          # Filter once — pass as frozen tuple to cached functions
-          _df_f = df_res.copy()
-          if _f_mix != "Todos":  _df_f = _df_f[_df_f["MIX"]==_f_mix]
-          if _f_cat != "Todas":  _df_f = _df_f[_df_f["CATEGORIA"]==_f_cat]
-          if _f_blq != "Todos" and "BLOQUE_DOMINANTE" in _df_f.columns:
-              _df_f = _df_f[_df_f["BLOQUE_DOMINANTE"]==_f_blq]
-  
-          d_left, d_right = st.columns(2)
-  
-          with d_left:
-              st.markdown("**Por cantidad de anchos**")
-              if _df_f.empty:
-                  st.info("Sin datos.")
-              else:
-                  import plotly.graph_objects as go
-                  _anc = (_df_f.groupby("ANCHOS_UNICOS")
-                          .agg(Lotes=("LOTE_ID","nunique"), LBS=("LBS_TOTAL","sum"))
-                          .reset_index().sort_values("ANCHOS_UNICOS"))
-                  _colors = ["#9FE1CB","#1D9E75","#0F6E56","#04342C","#B5D4F4","#378ADD"]
-                  _fig1 = go.Figure(go.Pie(
-                      labels=[f"{int(r.ANCHOS_UNICOS)} ancho{'s' if r.ANCHOS_UNICOS>1 else ''}" for _,r in _anc.iterrows()],
-                      values=_anc["Lotes"], hole=0.55,
-                      marker_colors=_colors[:len(_anc)], textinfo="label+percent",
-                      hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
-                  ))
-                  _fig1.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
-                  st.plotly_chart(_fig1, use_container_width=True)
-                  _ad = _anc.copy()
-                  _ad["ANCHOS_UNICOS"] = _ad["ANCHOS_UNICOS"].astype(int)
-                  _ad["% Lotes"] = (_ad["Lotes"]/_ad["Lotes"].sum()*100).round(1)
-                  _ad["LBS"] = _ad["LBS"].apply(fmt)
-                  st.dataframe(_ad.rename(columns={"ANCHOS_UNICOS":"N° Anchos"})[["N° Anchos","Lotes","% Lotes","LBS"]],
-                               use_container_width=True, hide_index=True, height=180)
-  
-          with d_right:
-              st.markdown("**Por cantidad de LNKs por lote**")
-              if _df_f.empty or "SKU_DISTINTOS" not in _df_f.columns:
-                  st.info("Sin datos.")
-              else:
-                  def _bin(n):
-                      n=int(n)
-                      return f"{n} LNK{'s' if n>1 else ''}" if n<=4 else "5+ LNKs"
-                  _df_f2 = _df_f.copy()
-                  _df_f2["_BIN"] = _df_f2["SKU_DISTINTOS"].apply(_bin)
-                  _lnk = _df_f2.groupby("_BIN").agg(Lotes=("LOTE_ID","nunique"),LBS=("LBS_TOTAL","sum")).reset_index()
-                  _ord = ["1 LNK","2 LNKs","3 LNKs","4 LNKs","5+ LNKs"]
-                  _lnk["_o"] = _lnk["_BIN"].apply(lambda x: _ord.index(x) if x in _ord else 99)
-                  _lnk = _lnk.sort_values("_o").drop(columns=["_o"])
-                  _colors2 = ["#B5D4F4","#378ADD","#185FA5","#0C447C","#042C53"]
-                  _fig2 = go.Figure(go.Pie(
-                      labels=_lnk["_BIN"], values=_lnk["Lotes"], hole=0.55,
-                      marker_colors=_colors2[:len(_lnk)], textinfo="label+percent",
-                      hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
-                  ))
-                  _fig2.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
-                  st.plotly_chart(_fig2, use_container_width=True)
-                  _ld = _lnk.copy()
-                  _ld["% Lotes"] = (_ld["Lotes"]/_ld["Lotes"].sum()*100).round(1)
-                  _ld["LBS"] = _ld["LBS"].apply(fmt)
-                  st.dataframe(_ld.rename(columns={"_BIN":"LNKs por lote"})[["LNKs por lote","Lotes","% Lotes","LBS"]],
-                               use_container_width=True, hide_index=True, height=180)
-  
-      st.caption("💡 Las tablas resumen detalladas están en la pestaña **📄 Resumen**.")
-  
-  with tab_d:
-      if df_det.empty: st.info("Sin lotes.")
-      else:
-          d1,d2,d3=st.columns(3)
-          fm=d1.multiselect("MIX",    sorted(df_det["MIX"].unique()),key="dm")
-          fr=d2.multiselect("Regla",  sorted(df_det["APLICA_REGLA"].unique()),key="dr")
-          fb=d3.multiselect("Bloque", sorted(df_det["BLOQUE"].unique()),key="db")
-          filt=df_det.copy()
-          if fm: filt=filt[filt["MIX"].isin(fm)]
-          if fr: filt=filt[filt["APLICA_REGLA"].isin(fr)]
-          if fb: filt=filt[filt["BLOQUE"].isin(fb)]
-          MAX_ROWS=2000
-          if len(filt)>MAX_ROWS:
-              st.caption(f"⚠️ Mostrando primeras {MAX_ROWS:,} de {len(filt):,} filas. Usa filtros para reducir.")
-              filt=filt.head(MAX_ROWS)
-          st.dataframe(filt,use_container_width=True,height=420)
-          st.caption(f"{len(filt):,} filas visibles")
-  
-  with tab_r:
-      if df_res.empty: st.info("Sin resumen.")
-      else:
-          st.dataframe(df_res,use_container_width=True,height=350)
-          st.divider()
-          st.markdown("#### 📋 Tablas Resumen")
-          ta,tb,tc,td,te=st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría","Resumen Dinámico"])
-  
-          with ta:
-              prio_df2=reports.get("PRIORIDAD_VS_ASIG",pd.DataFrame())
-              if prio_df2.empty: st.info("Sin datos.")
-              else:
-                  t1=prio_df2.copy()
-                  if not df_res.empty and "BLOQUE_DOMINANTE" in df_res.columns:
-                      lb2=(df_res.groupby(["BLOQUE_DOMINANTE","MIX"]).agg(LOTES=("LOTE_ID","nunique")).reset_index())
-                      lb2.columns=["BLOQUE","MIX","LOTES"]
-                      t1=t1.merge(lb2,on=["BLOQUE","MIX"],how="left").fillna({"LOTES":0})
-                  else:
-                      t1["LOTES"]=0
-                  t1["LOTES"]=t1["LOTES"].astype(int)
-                  t1["% ASIGNADO"]=(t1["LBS_ASIGNADAS"]/t1["LBS_BASE"].replace(0,pd.NA)*100).fillna(0).round(1)
-                  t1=t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas","LBS_ASIGNADAS":"LBS Asignadas","LBS_SIN_ASIGNAR":"LBS Sin Asignar"})
-                  cols=[c for c in ["Prioridad","MIX","LBS Planeadas","LBS Asignadas","LBS Sin Asignar","LOTES","% ASIGNADO"] if c in t1.columns]
-                  st.dataframe(t1[cols],use_container_width=True,hide_index=True)
-  
-          with tb:
-              if df_res.empty: st.info("Sin datos.")
-              else:
-                  t2=(df_res.groupby("ANCHOS_UNICOS").agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique")).reset_index().sort_values("ANCHOS_UNICOS"))
-                  t2.columns=["N° Anchos","LBS Asignadas","Lotes"]
-                  tot=t2["LBS Asignadas"].sum()
-                  t2["% del Total"]=(t2["LBS Asignadas"]/tot*100).round(1) if tot>0 else 0
-                  st.dataframe(t2,use_container_width=True,hide_index=True)
-  
-          with tc:
-              if df_res.empty: st.info("Sin datos.")
-              else:
-                  t3=(df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"]).agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique"),MinLBS=("LBS_TOTAL","min"),MaxLBS=("LBS_TOTAL","max")).reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"]))
-                  t3.columns=["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
-                  st.dataframe(t3,use_container_width=True,hide_index=True)
-  
-          with td:
-              cap_df2=reports.get("CAPACIDAD_X_CATEG",pd.DataFrame())
-              if cap_df2.empty: st.info("Sin datos.")
-              else:
-                  t4=cap_df2.copy()
-                  if not df_res.empty:
-                      lc=df_res.groupby("CATEGORIA").agg(LOTES=("LOTE_ID","nunique")).reset_index()
-                      t4=t4.merge(lc,on="CATEGORIA",how="left").fillna({"LOTES":0})
-                      t4["LOTES"]=t4["LOTES"].astype(int)
-                  disp={"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX","LBS_ASIGNADAS":"LBS Asignadas","LOTES":"Lotes","CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
-                  t4=t4.rename(columns=disp)
-                  st.dataframe(t4[[v for v in disp.values() if v in t4.columns]],use_container_width=True,hide_index=True)
-  
-          with te:
-              st.markdown("**Resumen dinámico** — agrupa por los campos que elijas.")
-              if df_det.empty: st.info("Sin datos.")
-              else:
-                  RES_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO","MIX","BLOQUE","APLICA_REGLA","CATEGORIA","PRIORIDAD","ANCHOS_LOTE","LNK"] if c in df_det.columns]
-                  METRIC_OPTS={k:v for k,v in {"LBS Asignadas":"LBS_ASIGNADAS","Docenas":"DOCENAS"}.items() if v in df_det.columns}
-                  re1,re2,re3=st.columns([3,2,1])
-                  rg_sel=re1.multiselect("Agrupar por",RES_OPTS,default=["MIX","BLOQUE"] if "BLOQUE" in df_det.columns else RES_OPTS[:1],key="rg_sel")
-                  rm_sel=re2.selectbox("Métrica",list(METRIC_OPTS.keys()),key="rm_sel")
-                  rn_top=re3.number_input("Top N",5,500,50,key="rn_top")
-                  if rg_sel and rm_sel:
-                      mc=METRIC_OPTS[rm_sel]
-                      try:
-                          rt=df_det.groupby(rg_sel,as_index=False)[mc].sum()
-                          rt=rt.sort_values(mc,ascending=False).head(rn_top)
-                          total_m=df_det[mc].sum()
-                          rt["% del Total"]=(rt[mc]/total_m*100).round(1) if total_m>0 else 0
-                          rt=rt.rename(columns={mc:rm_sel})
-                          st.dataframe(rt,use_container_width=True,hide_index=True,height=min(60+35*len(rt),380))
-                          st.caption(f"Total {rm_sel}: {total_m:,.1f} · {len(rt)} grupos")
-                      except Exception as e:
-                          st.error(f"Error: {e}")
-  
-  
-  with tab_l:
-      dlog=reports.get("DECISION_LOG",pd.DataFrame())
-      if dlog.empty: st.info("Sin log.")
-      else:
-          l1,l2,l3=st.columns(3)
-          lnk_s=l1.text_input("LNK contiene",key="ll")
-          lr=l2.multiselect("Regla",sorted(dlog["APLICA_REGLA"].unique()) if "APLICA_REGLA" in dlog.columns else [],key="lr")
-          lb=l3.multiselect("Bloque",sorted(dlog["BLOQUE"].unique()) if "BLOQUE" in dlog.columns else [],key="lb")
-          lf=dlog.copy()
-          if lnk_s: lf=lf[lf["LNK"].str.contains(lnk_s,case=False,na=False)]
-          if lr: lf=lf[lf["APLICA_REGLA"].isin(lr)]
-          if lb: lf=lf[lf["BLOQUE"].isin(lb)]
-          st.dataframe(lf,use_container_width=True,height=440)
-          with st.expander("📖 Leyenda de códigos de descarte"):
-              for code,desc in DESCARTE_MSGS.items():
-                  st.caption(f"**{code}** — {desc}")
-          st.caption(f"{len(lf):,} registros")
-  
-  with tab_c:
-      hist=st.session_state.run_history
-      if len(hist)<2: st.info("Corre al menos 2 corridas.")
-      else:
-          rows=[]
-          for i,r in enumerate(hist):
-              d=r["detalle"]; s=r["resumen"]; exc=r["excedentes"]
-              lc=r["reports"].get("LNK_COMPLETITUD",pd.DataFrame())
-              _t=r.get("tiempo_seg",0); _rm,_rs=divmod(int(_t),60)
-              rows.append({
-                  "#":i+1, "Hora":r["label"],
-                  "Tiempo":f"{_rm:02d}:{_rs:02d}",
-                  "Calidad":r.get("quality_used","?"),
-                  "Comentario":r.get("comentario","—"),
-                  "Lotes":len(s),
-                  "LBS Asignadas":fmt(d["LBS_ASIGNADAS"].sum() if not d.empty else 0),
-                  "LBS Excedentes":fmt(exc["LBS_RESTANTES"].sum() if not exc.empty else 0),
-                  "Cap. Perdida":fmt(s["CAPACIDAD_PERDIDA"].sum() if not s.empty else 0),
-                  "LNKs %":f"{(lc['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lc)*100) if not lc.empty else 0:.1f}%",
-                  "Cancelada":"Sí" if r.get("cancelled") else "No",
-                          "Modo": r.get("modo","Libre"),
-              })
-          st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-          st.subheader("Descargar corridas")
-          for i,r in enumerate(hist):
-              lbl=f"⬇ #{i+1} {r['label']}" + (f" — {r['comentario']}" if r.get("comentario") else "")
-              fn=f"RESULTADOS_LOTES_{r['ts'].replace(':','').replace(' ','_').replace('-','')}.xlsx"
-              st.download_button(lbl, data=export_excel(r), file_name=fn,
-                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                 key=f"dl_{i}")
-  
-  
-  with tab_e:
-      if df_exc.empty: st.success("✅ Sin excedentes.")
-      else:
-          st.warning(f"⚠️ {len(df_exc):,} filas sin asignar")
-          st.dataframe(df_exc,use_container_width=True,height=420)
-  
-  with tab_t:
-      df_tej = res.get("detalle_tejido", pd.DataFrame())
-      df_stk = res.get("stock_tejido",   pd.DataFrame())
-  
-      if res.get("modo","Libre") == "Libre":
-          st.info("ℹ️ Este resultado se generó en **Modo Libre**. "
-                  "Activa el **Modo Restricción de Tejido** en el sidebar y sube el "
-                  "ANALISIS_INV para ver el plan de disponibilidad de tejido.")
-      elif df_tej.empty:
-          st.info("Sin movimientos de tejido registrados.")
-      else:
-          # ── Métricas rápidas ──────────────────────────────────────────────
-          modo_lote = res.get("modo","Libre")
-          st.markdown(f"**Modo:** {modo_lote}")
-  
-          lbs_inv  = df_tej[df_tej["FUENTE"]=="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
-          lbs_dias = df_tej[df_tej["FUENTE"]!="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
-          dia_max_global = int(df_tej["DIA_MAX_LOTE"].max()) if "DIA_MAX_LOTE" in df_tej.columns and not df_tej.empty else 0
-          label_dia = "INV MANO (hoy)" if dia_max_global == 0 else f"DIA {dia_max_global}"
-  
-          mc1,mc2,mc3 = st.columns(3)
-          mc1.metric("LBS de Inventario en Mano", f"{lbs_inv:,.0f}")
-          mc2.metric("LBS de Días Futuros",        f"{lbs_dias:,.0f}")
-          mc3.metric("Día más tardío del plan",     label_dia)
-  
-          # ── Sub-tabs ──────────────────────────────────────────────────────
-          st1, st2 = st.tabs(["📦 Detalle por lote/componente", "📊 Stock de tejido"])
-  
-          with st1:
-              st.caption("Una fila por cada componente de tejido asignado a un lote.")
-  
-              # ── Resumen de lotes por día ──────────────────────────────────
-              if "DIA_LOTE" in df_tej.columns:
-                  st.markdown("**📅 Resumen de lotes por día de disponibilidad**")
-                  _dia_ord = {"INV MANO": 0}
-                  for _i in range(1, 11): _dia_ord[f"DIA {_i}"] = _i
-  
-                  _resumen_dia = (
-                      df_tej.groupby("DIA_LOTE")["LOTE_ID"]
-                      .nunique()
-                      .reset_index()
-                      .rename(columns={"LOTE_ID": "Lotes", "DIA_LOTE": "Día"})
-                  )
-                  _lbs_dia = (
-                      df_tej.groupby("DIA_LOTE")["LBS_ASIGNADAS"]
-                      .sum()
-                      .reset_index()
-                      .rename(columns={"LBS_ASIGNADAS": "LBS Tejido", "DIA_LOTE": "Día"})
-                  )
-                  _resumen_dia = _resumen_dia.merge(_lbs_dia, on="Día")
-                  _resumen_dia["_ord"] = _resumen_dia["Día"].map(lambda x: _dia_ord.get(x, 99))
-                  _resumen_dia = _resumen_dia.sort_values("_ord").drop(columns=["_ord"]).reset_index(drop=True)
-                  _resumen_dia["LBS Tejido"] = _resumen_dia["LBS Tejido"].apply(lambda x: f"{x:,.0f}")
-                  _total_lotes = df_tej["LOTE_ID"].nunique()
-                  _resumen_dia.loc[len(_resumen_dia)] = ["TOTAL", _total_lotes, f"{df_tej['LBS_ASIGNADAS'].sum():,.0f}"]
-                  st.dataframe(_resumen_dia, use_container_width=True, hide_index=True, height=min(60+35*len(_resumen_dia), 320))
-                  st.divider()
-  
-              # ── Filtros ───────────────────────────────────────────────────
-              fc1,fc2,fc3,fc4 = st.columns(4)
-              _lotes_f  = fc1.multiselect("LOTE_ID",  sorted(df_tej["LOTE_ID"].unique()),  key="tf_lote")
-              _estilos_f= fc2.multiselect("ESTILO C", sorted(df_tej["ESTILO C"].unique()), key="tf_estilo")
-              _fuentes_f= fc3.multiselect("FUENTE",   sorted(df_tej["FUENTE"].unique()),   key="tf_fuente")
-              _dias_f   = fc4.multiselect("DÍA LOTE",
-                  sorted(df_tej["DIA_LOTE"].unique(),
-                         key=lambda x: _dia_ord.get(x, 99)) if "DIA_LOTE" in df_tej.columns else [],
-                  key="tf_dia")
-  
-              df_tej_f = df_tej.copy()
-              if _lotes_f:   df_tej_f = df_tej_f[df_tej_f["LOTE_ID"].isin(_lotes_f)]
-              if _estilos_f: df_tej_f = df_tej_f[df_tej_f["ESTILO C"].isin(_estilos_f)]
-              if _fuentes_f: df_tej_f = df_tej_f[df_tej_f["FUENTE"].isin(_fuentes_f)]
-              if _dias_f and "DIA_LOTE" in df_tej_f.columns:
-                  df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
-  
-              st.caption(f"{len(df_tej_f):,} filas · {df_tej_f['LOTE_ID'].nunique():,} lotes")
-              st.dataframe(df_tej_f, use_container_width=True, height=420)
-  
-          with st2:
-              st.caption(
-                  "Inventario inicial vs. asignado vs. remanente por (ESTILO C, DG, LOTE FACE). "
-                  "Columnas INI/ASIG/REM para cada fuente."
-              )
-              # Mostrar solo columnas resumen por defecto; usuario puede ver todo
-              cols_res = ["ESTILO C","DG","LOTE FACE","TOTAL_INICIAL","TOTAL_ASIGNADO","TOTAL_REMANENTE"]
-              cols_show = [c for c in cols_res if c in df_stk.columns]
-              expand = st.toggle("Ver todas las columnas (por fuente)", value=False, key="stk_expand")
-              df_show = df_stk if expand else df_stk[cols_show]
-              # Highlight filas con asignación > 0
-              st.dataframe(
-                  df_show.style.apply(
-                      lambda r: ["background-color: #eff6ff" if r.get("TOTAL_ASIGNADO",0)>0 else "" for _ in r],
-                      axis=1
-                  ) if "TOTAL_ASIGNADO" in df_show.columns else df_show,
-                  use_container_width=True,
-                  height=500,
-              )
-  
-  st.divider()
-  ts=res["ts"].replace(":","").replace(" ","_").replace("-","")
-  st.download_button("⬇  Descargar Excel completo",data=export_excel(res),
-                     file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
-                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     use_container_width=True)
-  
+
+# ── Resultados (fuera del expander, nivel raíz) ────────────────────────────
+if st.session_state.last_result is None: st.stop()
+
+st.divider()
+st.markdown("### 📊 Resultados")
+
+# ── Selector de corrida ────────────────────────────────────────────────────
+_hist = st.session_state.run_history
+if len(_hist) > 1:
+    _opts = []
+    for i, r in enumerate(_hist):
+        _t = r.get("tiempo_seg",0); _rm,_rs = divmod(int(_t),60)
+        _lbl = (f"#{i+1} · {r['label']} · Calidad {r.get('quality_used','?')} · "
+                f"{_rm:02d}:{_rs:02d}"
+                + (f" · 💬 {r['comentario']}" if r.get("comentario") else ""))
+        _opts.append(_lbl)
+    _sel_idx = st.selectbox(
+        "Ver corrida", range(len(_opts)),
+        format_func=lambda i: _opts[i],
+        index=len(_hist)-1,   # última por default
+        key="corrida_sel"
+    )
+    res = _hist[_sel_idx]
+else:
+    res = st.session_state.last_result
+
+df_det=res["detalle"]; df_res=res["resumen"]
+df_exc=res["excedentes"]; reports=res["reports"]
+lnk_df=reports.get("LNK_COMPLETITUD",pd.DataFrame())
+
+if res.get("cancelled"):
+    st.warning("⚠️ Corrida cancelada — resultados parciales")
+
+_modo_badge = res.get("modo","Libre")
+_badge_color = "#3b82f6" if _modo_badge == "Restricción" else "#16a34a"
+st.markdown(
+    f'<span style="background:{_badge_color};color:#fff;padding:3px 10px;border-radius:12px;'
+    f'font-size:.82rem;font-weight:600;">Modo: {_modo_badge}</span>',
+    unsafe_allow_html=True,
+)
+
+_comment=res.get("comentario","")
+_ql_used=res.get("quality_used","?")
+_t_seg=res.get("tiempo_seg",0)
+_tm,_ts=divmod(int(_t_seg),60)
+st.caption(f"Corrida: {res['ts']}  ·  Calidad: {_ql_used}  ·  Tiempo: {_tm:02d}:{_ts:02d}  {'·  💬 '+_comment if _comment else ''}")
+
+k1,k2,k3,k4,k5,k6,k7=st.columns(7)
+_lbs_asig = df_det["LBS_ASIGNADAS"].sum() if not df_det.empty else 0
+_lbs_plan = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
+_lbs_plan_total = _lbs_plan["LBS_BASE"].sum() if not _lbs_plan.empty and "LBS_BASE" in _lbs_plan.columns else 0
+_pct_plan = (_lbs_asig / _lbs_plan_total * 100) if _lbs_plan_total > 0 else 0
+k1.metric("Lotes",          f"{len(df_res):,}")
+k2.metric("LBS Planeadas",  fmt(_lbs_plan_total))
+k3.metric("LBS Asignadas",  fmt(_lbs_asig))
+k4.metric("% vs Plan",      f"{_pct_plan:.1f}%")
+k5.metric("LBS Excedentes", fmt(df_exc["LBS_RESTANTES"].sum() if not df_exc.empty else 0))
+k6.metric("LNKs completos",
+          f"{(lnk_df['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lnk_df)*100) if not lnk_df.empty else 0:.1f}%")
+k7.metric("Cap. perdida",   fmt(df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0))
+
+tab_g,tab_d,tab_r,tab_l,tab_c,tab_e,tab_t=st.tabs([
+    "📊 Gráficas","📋 Detalle Lotes","📄 Resumen",
+    "🔍 Decision Log","🔁 Comparar Corridas","⚠️ Excedentes",
+    "🧵 Disponibilidad Tejido"])
+
+with tab_g:
+    cap_df  = reports.get("CAPACIDAD_X_CATEG", pd.DataFrame())
+    prio_df = reports.get("PRIORIDAD_VS_ASIG", pd.DataFrame())
+
+    # ── Gráficas existentes ────────────────────────────────────────────────
+    c1,c2=st.columns(2)
+    with c1: st.plotly_chart(chart_capacidad_barras(cap_df), use_container_width=True)
+    with c2: st.plotly_chart(chart_bloques_donut(prio_df),   use_container_width=True)
+    c3,c4=st.columns(2)
+    with c3: st.plotly_chart(chart_heatmap_capacidad(cap_df),  use_container_width=True)
+    with c4: st.plotly_chart(chart_completitud_lnk(lnk_df),    use_container_width=True)
+
+    st.divider()
+
+    # ── Donuts: Anchos y LNKs ──────────────────────────────────────────────
+    st.markdown("#### 🍩 Distribución de Lotes")
+
+    if df_res.empty:
+        st.info("Sin datos de lotes.")
+    else:
+        _f1,_f2,_f3 = st.columns(3)
+        _mix_opts = ["Todos"] + sorted(df_res["MIX"].unique().tolist())
+        _cat_opts = ["Todas"] + sorted(df_res["CATEGORIA"].dropna().unique().tolist())
+        _blq_opts = ["Todos"] + (sorted(df_res["BLOQUE_DOMINANTE"].dropna().unique().tolist()) if "BLOQUE_DOMINANTE" in df_res.columns else [])
+        _f_mix = _f1.selectbox("MIX",       _mix_opts, key="dg_mix")
+        _f_cat = _f2.selectbox("Categoría", _cat_opts, key="dg_cat")
+        _f_blq = _f3.selectbox("Bloque",    ["Todos"]+_blq_opts, key="dg_blq")
+
+        # Filter once — pass as frozen tuple to cached functions
+        _df_f = df_res.copy()
+        if _f_mix != "Todos":  _df_f = _df_f[_df_f["MIX"]==_f_mix]
+        if _f_cat != "Todas":  _df_f = _df_f[_df_f["CATEGORIA"]==_f_cat]
+        if _f_blq != "Todos" and "BLOQUE_DOMINANTE" in _df_f.columns:
+            _df_f = _df_f[_df_f["BLOQUE_DOMINANTE"]==_f_blq]
+
+        d_left, d_right = st.columns(2)
+
+        with d_left:
+            st.markdown("**Por cantidad de anchos**")
+            if _df_f.empty:
+                st.info("Sin datos.")
+            else:
+                import plotly.graph_objects as go
+                _anc = (_df_f.groupby("ANCHOS_UNICOS")
+                        .agg(Lotes=("LOTE_ID","nunique"), LBS=("LBS_TOTAL","sum"))
+                        .reset_index().sort_values("ANCHOS_UNICOS"))
+                _colors = ["#9FE1CB","#1D9E75","#0F6E56","#04342C","#B5D4F4","#378ADD"]
+                _fig1 = go.Figure(go.Pie(
+                    labels=[f"{int(r.ANCHOS_UNICOS)} ancho{'s' if r.ANCHOS_UNICOS>1 else ''}" for _,r in _anc.iterrows()],
+                    values=_anc["Lotes"], hole=0.55,
+                    marker_colors=_colors[:len(_anc)], textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
+                ))
+                _fig1.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
+                st.plotly_chart(_fig1, use_container_width=True)
+                _ad = _anc.copy()
+                _ad["ANCHOS_UNICOS"] = _ad["ANCHOS_UNICOS"].astype(int)
+                _ad["% Lotes"] = (_ad["Lotes"]/_ad["Lotes"].sum()*100).round(1)
+                _ad["LBS"] = _ad["LBS"].apply(fmt)
+                st.dataframe(_ad.rename(columns={"ANCHOS_UNICOS":"N° Anchos"})[["N° Anchos","Lotes","% Lotes","LBS"]],
+                             use_container_width=True, hide_index=True, height=180)
+
+        with d_right:
+            st.markdown("**Por cantidad de LNKs por lote**")
+            if _df_f.empty or "SKU_DISTINTOS" not in _df_f.columns:
+                st.info("Sin datos.")
+            else:
+                def _bin(n):
+                    n=int(n)
+                    return f"{n} LNK{'s' if n>1 else ''}" if n<=4 else "5+ LNKs"
+                _df_f2 = _df_f.copy()
+                _df_f2["_BIN"] = _df_f2["SKU_DISTINTOS"].apply(_bin)
+                _lnk = _df_f2.groupby("_BIN").agg(Lotes=("LOTE_ID","nunique"),LBS=("LBS_TOTAL","sum")).reset_index()
+                _ord = ["1 LNK","2 LNKs","3 LNKs","4 LNKs","5+ LNKs"]
+                _lnk["_o"] = _lnk["_BIN"].apply(lambda x: _ord.index(x) if x in _ord else 99)
+                _lnk = _lnk.sort_values("_o").drop(columns=["_o"])
+                _colors2 = ["#B5D4F4","#378ADD","#185FA5","#0C447C","#042C53"]
+                _fig2 = go.Figure(go.Pie(
+                    labels=_lnk["_BIN"], values=_lnk["Lotes"], hole=0.55,
+                    marker_colors=_colors2[:len(_lnk)], textinfo="label+percent",
+                    hovertemplate="<b>%{label}</b><br>Lotes: %{value:,}<br>%{percent}<extra></extra>",
+                ))
+                _fig2.update_layout(height=300, margin=dict(t=10,b=10,l=10,r=10), showlegend=False)
+                st.plotly_chart(_fig2, use_container_width=True)
+                _ld = _lnk.copy()
+                _ld["% Lotes"] = (_ld["Lotes"]/_ld["Lotes"].sum()*100).round(1)
+                _ld["LBS"] = _ld["LBS"].apply(fmt)
+                st.dataframe(_ld.rename(columns={"_BIN":"LNKs por lote"})[["LNKs por lote","Lotes","% Lotes","LBS"]],
+                             use_container_width=True, hide_index=True, height=180)
+
+    st.caption("💡 Las tablas resumen detalladas están en la pestaña **📄 Resumen**.")
+
+with tab_d:
+    if df_det.empty: st.info("Sin lotes.")
+    else:
+        d1,d2,d3=st.columns(3)
+        fm=d1.multiselect("MIX",    sorted(df_det["MIX"].unique()),key="dm")
+        fr=d2.multiselect("Regla",  sorted(df_det["APLICA_REGLA"].unique()),key="dr")
+        fb=d3.multiselect("Bloque", sorted(df_det["BLOQUE"].unique()),key="db")
+        filt=df_det.copy()
+        if fm: filt=filt[filt["MIX"].isin(fm)]
+        if fr: filt=filt[filt["APLICA_REGLA"].isin(fr)]
+        if fb: filt=filt[filt["BLOQUE"].isin(fb)]
+        MAX_ROWS=2000
+        if len(filt)>MAX_ROWS:
+            st.caption(f"⚠️ Mostrando primeras {MAX_ROWS:,} de {len(filt):,} filas. Usa filtros para reducir.")
+            filt=filt.head(MAX_ROWS)
+        st.dataframe(filt,use_container_width=True,height=420)
+        st.caption(f"{len(filt):,} filas visibles")
+
+with tab_r:
+    if df_res.empty: st.info("Sin resumen.")
+    else:
+        st.dataframe(df_res,use_container_width=True,height=350)
+        st.divider()
+        st.markdown("#### 📋 Tablas Resumen")
+        ta,tb,tc,td,te=st.tabs(["Por Prioridad","Por N° Anchos","Anchos × Categoría","Por Categoría","Resumen Dinámico"])
+
+        with ta:
+            prio_df2=reports.get("PRIORIDAD_VS_ASIG",pd.DataFrame())
+            if prio_df2.empty: st.info("Sin datos.")
+            else:
+                t1=prio_df2.copy()
+                if not df_res.empty and "BLOQUE_DOMINANTE" in df_res.columns:
+                    lb2=(df_res.groupby(["BLOQUE_DOMINANTE","MIX"]).agg(LOTES=("LOTE_ID","nunique")).reset_index())
+                    lb2.columns=["BLOQUE","MIX","LOTES"]
+                    t1=t1.merge(lb2,on=["BLOQUE","MIX"],how="left").fillna({"LOTES":0})
+                else:
+                    t1["LOTES"]=0
+                t1["LOTES"]=t1["LOTES"].astype(int)
+                t1["% ASIGNADO"]=(t1["LBS_ASIGNADAS"]/t1["LBS_BASE"].replace(0,pd.NA)*100).fillna(0).round(1)
+                t1=t1.rename(columns={"BLOQUE":"Prioridad","LBS_BASE":"LBS Planeadas","LBS_ASIGNADAS":"LBS Asignadas","LBS_SIN_ASIGNAR":"LBS Sin Asignar"})
+                cols=[c for c in ["Prioridad","MIX","LBS Planeadas","LBS Asignadas","LBS Sin Asignar","LOTES","% ASIGNADO"] if c in t1.columns]
+                st.dataframe(t1[cols],use_container_width=True,hide_index=True)
+
+        with tb:
+            if df_res.empty: st.info("Sin datos.")
+            else:
+                t2=(df_res.groupby("ANCHOS_UNICOS").agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique")).reset_index().sort_values("ANCHOS_UNICOS"))
+                t2.columns=["N° Anchos","LBS Asignadas","Lotes"]
+                tot=t2["LBS Asignadas"].sum()
+                t2["% del Total"]=(t2["LBS Asignadas"]/tot*100).round(1) if tot>0 else 0
+                st.dataframe(t2,use_container_width=True,hide_index=True)
+
+        with tc:
+            if df_res.empty: st.info("Sin datos.")
+            else:
+                t3=(df_res.groupby(["ANCHOS_UNICOS","CATEGORIA"]).agg(LBS=("LBS_TOTAL","sum"),Lotes=("LOTE_ID","nunique"),MinLBS=("LBS_TOTAL","min"),MaxLBS=("LBS_TOTAL","max")).reset_index().sort_values(["ANCHOS_UNICOS","CATEGORIA"]))
+                t3.columns=["N° Anchos","Categoría","LBS Asignadas","Lotes","Min LBS Lote","Max LBS Lote"]
+                st.dataframe(t3,use_container_width=True,hide_index=True)
+
+        with td:
+            cap_df2=reports.get("CAPACIDAD_X_CATEG",pd.DataFrame())
+            if cap_df2.empty: st.info("Sin datos.")
+            else:
+                t4=cap_df2.copy()
+                if not df_res.empty:
+                    lc=df_res.groupby("CATEGORIA").agg(LOTES=("LOTE_ID","nunique")).reset_index()
+                    t4=t4.merge(lc,on="CATEGORIA",how="left").fillna({"LOTES":0})
+                    t4["LOTES"]=t4["LOTES"].astype(int)
+                disp={"CATEGORIA":"Categoría","MINIMO":"Mín LBS","MAXIMO":"Máx LBS","MIX":"MIX","LBS_ASIGNADAS":"LBS Asignadas","LOTES":"Lotes","CAPACIDAD":"Capacidad","PCT_OCUPACION":"% Ocupación"}
+                t4=t4.rename(columns=disp)
+                st.dataframe(t4[[v for v in disp.values() if v in t4.columns]],use_container_width=True,hide_index=True)
+
+        with te:
+            st.markdown("**Resumen dinámico** — agrupa por los campos que elijas.")
+            if df_det.empty: st.info("Sin datos.")
+            else:
+                RES_OPTS=[c for c in ["TELA.CUERPO","STYLE","COLOR","COLOR_R","FAMILIA","TONO","MIX","BLOQUE","APLICA_REGLA","CATEGORIA","PRIORIDAD","ANCHOS_LOTE","LNK"] if c in df_det.columns]
+                METRIC_OPTS={k:v for k,v in {"LBS Asignadas":"LBS_ASIGNADAS","Docenas":"DOCENAS"}.items() if v in df_det.columns}
+                re1,re2,re3=st.columns([3,2,1])
+                rg_sel=re1.multiselect("Agrupar por",RES_OPTS,default=["MIX","BLOQUE"] if "BLOQUE" in df_det.columns else RES_OPTS[:1],key="rg_sel")
+                rm_sel=re2.selectbox("Métrica",list(METRIC_OPTS.keys()),key="rm_sel")
+                rn_top=re3.number_input("Top N",5,500,50,key="rn_top")
+                if rg_sel and rm_sel:
+                    mc=METRIC_OPTS[rm_sel]
+                    try:
+                        rt=df_det.groupby(rg_sel,as_index=False)[mc].sum()
+                        rt=rt.sort_values(mc,ascending=False).head(rn_top)
+                        total_m=df_det[mc].sum()
+                        rt["% del Total"]=(rt[mc]/total_m*100).round(1) if total_m>0 else 0
+                        rt=rt.rename(columns={mc:rm_sel})
+                        st.dataframe(rt,use_container_width=True,hide_index=True,height=min(60+35*len(rt),380))
+                        st.caption(f"Total {rm_sel}: {total_m:,.1f} · {len(rt)} grupos")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+
+with tab_l:
+    dlog=reports.get("DECISION_LOG",pd.DataFrame())
+    if dlog.empty: st.info("Sin log.")
+    else:
+        l1,l2,l3=st.columns(3)
+        lnk_s=l1.text_input("LNK contiene",key="ll")
+        lr=l2.multiselect("Regla",sorted(dlog["APLICA_REGLA"].unique()) if "APLICA_REGLA" in dlog.columns else [],key="lr")
+        lb=l3.multiselect("Bloque",sorted(dlog["BLOQUE"].unique()) if "BLOQUE" in dlog.columns else [],key="lb")
+        lf=dlog.copy()
+        if lnk_s: lf=lf[lf["LNK"].str.contains(lnk_s,case=False,na=False)]
+        if lr: lf=lf[lf["APLICA_REGLA"].isin(lr)]
+        if lb: lf=lf[lf["BLOQUE"].isin(lb)]
+        st.dataframe(lf,use_container_width=True,height=440)
+        with st.expander("📖 Leyenda de códigos de descarte"):
+            for code,desc in DESCARTE_MSGS.items():
+                st.caption(f"**{code}** — {desc}")
+        st.caption(f"{len(lf):,} registros")
+
+with tab_c:
+    hist=st.session_state.run_history
+    if len(hist)<2: st.info("Corre al menos 2 corridas.")
+    else:
+        rows=[]
+        for i,r in enumerate(hist):
+            d=r["detalle"]; s=r["resumen"]; exc=r["excedentes"]
+            lc=r["reports"].get("LNK_COMPLETITUD",pd.DataFrame())
+            _t=r.get("tiempo_seg",0); _rm,_rs=divmod(int(_t),60)
+            rows.append({
+                "#":i+1, "Hora":r["label"],
+                "Tiempo":f"{_rm:02d}:{_rs:02d}",
+                "Calidad":r.get("quality_used","?"),
+                "Comentario":r.get("comentario","—"),
+                "Lotes":len(s),
+                "LBS Asignadas":fmt(d["LBS_ASIGNADAS"].sum() if not d.empty else 0),
+                "LBS Excedentes":fmt(exc["LBS_RESTANTES"].sum() if not exc.empty else 0),
+                "Cap. Perdida":fmt(s["CAPACIDAD_PERDIDA"].sum() if not s.empty else 0),
+                "LNKs %":f"{(lc['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lc)*100) if not lc.empty else 0:.1f}%",
+                "Cancelada":"Sí" if r.get("cancelled") else "No",
+                        "Modo": r.get("modo","Libre"),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.subheader("Descargar corridas")
+        for i,r in enumerate(hist):
+            lbl=f"⬇ #{i+1} {r['label']}" + (f" — {r['comentario']}" if r.get("comentario") else "")
+            fn=f"RESULTADOS_LOTES_{r['ts'].replace(':','').replace(' ','_').replace('-','')}.xlsx"
+            st.download_button(lbl, data=export_excel(r), file_name=fn,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key=f"dl_{i}")
+
+
+with tab_e:
+    if df_exc.empty: st.success("✅ Sin excedentes.")
+    else:
+        st.warning(f"⚠️ {len(df_exc):,} filas sin asignar")
+        st.dataframe(df_exc,use_container_width=True,height=420)
+
+with tab_t:
+    df_tej = res.get("detalle_tejido", pd.DataFrame())
+    df_stk = res.get("stock_tejido",   pd.DataFrame())
+
+    if res.get("modo","Libre") == "Libre":
+        st.info("ℹ️ Este resultado se generó en **Modo Libre**. "
+                "Activa el **Modo Restricción de Tejido** en el sidebar y sube el "
+                "ANALISIS_INV para ver el plan de disponibilidad de tejido.")
+    elif df_tej.empty:
+        st.info("Sin movimientos de tejido registrados.")
+    else:
+        # ── Métricas rápidas ──────────────────────────────────────────────
+        modo_lote = res.get("modo","Libre")
+        st.markdown(f"**Modo:** {modo_lote}")
+
+        lbs_inv  = df_tej[df_tej["FUENTE"]=="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
+        lbs_dias = df_tej[df_tej["FUENTE"]!="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
+        dia_max_global = int(df_tej["DIA_MAX_LOTE"].max()) if "DIA_MAX_LOTE" in df_tej.columns and not df_tej.empty else 0
+        label_dia = "INV MANO (hoy)" if dia_max_global == 0 else f"DIA {dia_max_global}"
+
+        mc1,mc2,mc3 = st.columns(3)
+        mc1.metric("LBS de Inventario en Mano", f"{lbs_inv:,.0f}")
+        mc2.metric("LBS de Días Futuros",        f"{lbs_dias:,.0f}")
+        mc3.metric("Día más tardío del plan",     label_dia)
+
+        # ── Sub-tabs ──────────────────────────────────────────────────────
+        st1, st2 = st.tabs(["📦 Detalle por lote/componente", "📊 Stock de tejido"])
+
+        with st1:
+            st.caption("Una fila por cada componente de tejido asignado a un lote.")
+
+            # ── Resumen de lotes por día ──────────────────────────────────
+            if "DIA_LOTE" in df_tej.columns:
+                st.markdown("**📅 Resumen de lotes por día de disponibilidad**")
+                _dia_ord = {"INV MANO": 0}
+                for _i in range(1, 11): _dia_ord[f"DIA {_i}"] = _i
+
+                _resumen_dia = (
+                    df_tej.groupby("DIA_LOTE")["LOTE_ID"]
+                    .nunique()
+                    .reset_index()
+                    .rename(columns={"LOTE_ID": "Lotes", "DIA_LOTE": "Día"})
+                )
+                _lbs_dia = (
+                    df_tej.groupby("DIA_LOTE")["LBS_ASIGNADAS"]
+                    .sum()
+                    .reset_index()
+                    .rename(columns={"LBS_ASIGNADAS": "LBS Tejido", "DIA_LOTE": "Día"})
+                )
+                _resumen_dia = _resumen_dia.merge(_lbs_dia, on="Día")
+                _resumen_dia["_ord"] = _resumen_dia["Día"].map(lambda x: _dia_ord.get(x, 99))
+                _resumen_dia = _resumen_dia.sort_values("_ord").drop(columns=["_ord"]).reset_index(drop=True)
+                _resumen_dia["LBS Tejido"] = _resumen_dia["LBS Tejido"].apply(lambda x: f"{x:,.0f}")
+                _total_lotes = df_tej["LOTE_ID"].nunique()
+                _resumen_dia.loc[len(_resumen_dia)] = ["TOTAL", _total_lotes, f"{df_tej['LBS_ASIGNADAS'].sum():,.0f}"]
+                st.dataframe(_resumen_dia, use_container_width=True, hide_index=True, height=min(60+35*len(_resumen_dia), 320))
+                st.divider()
+
+            # ── Filtros ───────────────────────────────────────────────────
+            fc1,fc2,fc3,fc4 = st.columns(4)
+            _lotes_f  = fc1.multiselect("LOTE_ID",  sorted(df_tej["LOTE_ID"].unique()),  key="tf_lote")
+            _estilos_f= fc2.multiselect("ESTILO C", sorted(df_tej["ESTILO C"].unique()), key="tf_estilo")
+            _fuentes_f= fc3.multiselect("FUENTE",   sorted(df_tej["FUENTE"].unique()),   key="tf_fuente")
+            _dias_f   = fc4.multiselect("DÍA LOTE",
+                sorted(df_tej["DIA_LOTE"].unique(),
+                       key=lambda x: _dia_ord.get(x, 99)) if "DIA_LOTE" in df_tej.columns else [],
+                key="tf_dia")
+
+            df_tej_f = df_tej.copy()
+            if _lotes_f:   df_tej_f = df_tej_f[df_tej_f["LOTE_ID"].isin(_lotes_f)]
+            if _estilos_f: df_tej_f = df_tej_f[df_tej_f["ESTILO C"].isin(_estilos_f)]
+            if _fuentes_f: df_tej_f = df_tej_f[df_tej_f["FUENTE"].isin(_fuentes_f)]
+            if _dias_f and "DIA_LOTE" in df_tej_f.columns:
+                df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
+
+            st.caption(f"{len(df_tej_f):,} filas · {df_tej_f['LOTE_ID'].nunique():,} lotes")
+            st.dataframe(df_tej_f, use_container_width=True, height=420)
+
+        with st2:
+            st.caption(
+                "Inventario inicial vs. asignado vs. remanente por (ESTILO C, DG, LOTE FACE). "
+                "Columnas INI/ASIG/REM para cada fuente."
+            )
+            # Mostrar solo columnas resumen por defecto; usuario puede ver todo
+            cols_res = ["ESTILO C","DG","LOTE FACE","TOTAL_INICIAL","TOTAL_ASIGNADO","TOTAL_REMANENTE"]
+            cols_show = [c for c in cols_res if c in df_stk.columns]
+            expand = st.toggle("Ver todas las columnas (por fuente)", value=False, key="stk_expand")
+            df_show = df_stk if expand else df_stk[cols_show]
+            # Highlight filas con asignación > 0
+            st.dataframe(
+                df_show.style.apply(
+                    lambda r: ["background-color: #eff6ff" if r.get("TOTAL_ASIGNADO",0)>0 else "" for _ in r],
+                    axis=1
+                ) if "TOTAL_ASIGNADO" in df_show.columns else df_show,
+                use_container_width=True,
+                height=500,
+            )
+
+st.divider()
+ts=res["ts"].replace(":","").replace(" ","_").replace("-","")
+st.download_button("⬇  Descargar Excel completo",data=export_excel(res),
+                   file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   use_container_width=True)
+
 with st.expander("📋  Sección prueba", expanded=True):
     st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
                 'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
