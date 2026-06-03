@@ -586,21 +586,41 @@ def run_loteo(df_data, df_cap, params,
                     plan_tejido_lote: dict = {}   # {lnk: LnkDisponibilidad}
 
                     if lote is not None and modo_restriccion:
-                        # Construir filas con LBS proporcionales al lote.
-                        # Un LNK puede tener LB.CUERPO = 26,400 (total del plan)
-                        # pero en este lote solo se le asignan 3,300 LBS.
-                        # Escalamos LB.* por el ratio (lbs_asig / TOTAL) para que
-                        # check_lnk reserve solo lo que este lote necesita.
+                        # Construir filas escaladas por componente para check_lnk.
+                        # Un LNK puede aparecer varias veces en ROWS (splits de prioridad).
+                        # Sumamos todas las lbs_asig del mismo LNK en este lote,
+                        # luego escalamos cada LB.* proporcionalmente al peso del componente.
+                        # Ejemplo: LNK con LB.CUERPO=836, LB.MANGAS=985, LB.RIB=349
+                        #   total_componentes=2170, lbs_asig_lote=2531
+                        #   ratio=2531/2170=1.166 → escala cada componente por ese factor
+                        # Si no hay LB.* o TOTAL=0, se usa la lbs_asig directamente.
+
+                        # Paso 1: sumar lbs_asig por LNK único en este lote
+                        lbs_por_lnk: dict = {}
+                        seen_lnks_sum: set = set()
+                        for idx2, lbs_asig2, *_ in lote["ROWS"]:
+                            lnk_id2 = work.at[idx2, "LNK"]
+                            lbs_por_lnk[lnk_id2] = lbs_por_lnk.get(lnk_id2, 0.0) + float(lbs_asig2)
+
+                        # Paso 2: construir filas escaladas (una por LNK único)
                         lnk_rows_del_lote = []
-                        seen_lnks: set = set()
-                        for idx, lbs_asig, *_ in lote["ROWS"]:
-                            lnk_id = work.at[idx, "LNK"]
-                            if lnk_id in seen_lnks:
-                                continue   # mismo LNK en dos filas (split prioridad)
-                            seen_lnks.add(lnk_id)
-                            row = work.loc[idx].copy()
-                            total_lnk = float(row.get("TOTAL", 0)) or 1.0
-                            ratio = min(1.0, float(lbs_asig) / total_lnk)
+                        seen_lnks2: set = set()
+                        for idx2, lbs_asig2, *_ in lote["ROWS"]:
+                            lnk_id2 = work.at[idx2, "LNK"]
+                            if lnk_id2 in seen_lnks2:
+                                continue
+                            seen_lnks2.add(lnk_id2)
+                            row = work.loc[idx2].copy()
+                            lbs_total_lnk_lote = lbs_por_lnk.get(lnk_id2, float(lbs_asig2))
+                            # Suma de LB.* (peso total de componentes del LNK)
+                            suma_lb = sum(
+                                max(0.0, float(row.get(c, 0) or 0))
+                                for c in ["LB.CUERPO", "LB.MANGAS", "LB.RIB", "LB.POCKET"]
+                            )
+                            if suma_lb > 1e-9:
+                                ratio = lbs_total_lnk_lote / suma_lb
+                            else:
+                                ratio = 1.0
                             for lbs_col in ["LB.CUERPO", "LB.MANGAS", "LB.RIB", "LB.POCKET"]:
                                 if lbs_col in row.index:
                                     try:
