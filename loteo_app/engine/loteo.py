@@ -18,6 +18,9 @@ from engine.utils import (
     valid_width_group, get_row_widths, choose_take,
     choose_take_humano, build_ranges, rango_param,
 )
+from engine.disponibilidad import (
+    DisponibilidadIndex, LnkDisponibilidad, FUENTE_INV, DIA_COLS,
+)
 
 # ── QUALITY_LEVEL → BEAM_WIDTH mapping ──────────────────────────────────────
 def quality_to_beam(level: int) -> int:
@@ -407,12 +410,19 @@ def _lookahead_vencidos_ok(work, lote_rows, ranges_mix, capacity_used_snap, para
 
 # ── Main run_loteo ────────────────────────────────────────────────────────────
 def run_loteo(df_data, df_cap, params,
-              progress_callback=None, cancel_flag=None):
+              progress_callback=None, cancel_flag=None,
+              dispon_index: "DisponibilidadIndex | None" = None):
     """
     progress_callback(pct, msg, stats) where stats is a dict.
     cancel_flag: a list [False] — set [True] from outside to cancel.
-    Returns (df_detalle, df_resumen, df_excedentes, df_params, cancelled:bool)
+    dispon_index: DisponibilidadIndex para modo restricción de tejido.
+                  None = modo libre (comportamiento original).
+    Returns (df_detalle, df_resumen, df_excedentes, df_params, cancelled:bool,
+             df_detalle_tejido, df_stock_report)
+    Los dos últimos son DataFrames vacíos en modo libre.
     """
+    modo_restriccion = dispon_index is not None
+
     ranges = build_ranges(df_cap)
     capacity_used = {r["RANGO_ID"]:0.0 for r in ranges}
 
@@ -430,6 +440,29 @@ def run_loteo(df_data, df_cap, params,
                 v=data.at[idx,c]
                 if pd.notna(v) and float(v)!=0.0: ws.append(float(v))
         width_cache[idx]=ws
+
+    # ── Pre-filtro de disponibilidad (modo restricción) ──────────────────
+    # Marcamos filas sin disponibilidad para excluirlas del loteo.
+    # Se evalúa una vez aquí — O(n) con lookup O(1).
+    if modo_restriccion:
+        sin_dispon = set()
+        for idx in data.index:
+            if not dispon_index.lnk_tiene_disponibilidad(data.loc[idx]):
+                sin_dispon.add(idx)
+        # Esas filas van directo a excedentes (LBS_RESTANTES queda intacto)
+        # Se excluyen poniendo LBS_RESTANTES = 0 en la copia de trabajo
+        # SOLO para el loop de loteo; las guardaremos al final como excedentes.
+        data_sin_dispon = data.loc[list(sin_dispon)].copy()
+        data_con_dispon = data.drop(index=list(sin_dispon)).copy()
+    else:
+        data_sin_dispon = pd.DataFrame(columns=data.columns)
+        data_con_dispon = data.copy()
+
+    # Trabajamos sobre data_con_dispon para el loop principal
+    data = data_con_dispon
+
+    # Reasignamos el width_cache para que solo contenga índices válidos
+    width_cache = {idx: width_cache[idx] for idx in data.index if idx in width_cache}
 
     detalle=[]; resumen=[]; lote_id_global=1
     block_order=["VENCIDOS","AHEAD","AHEAD2","OTROS"]
@@ -480,6 +513,15 @@ def run_loteo(df_data, df_cap, params,
                 best_lote=None; best_pack=None; best_score=-1e30
 
                 for seed_idx in top_seeds:
+                    # ── Modo restricción: verificar disponibilidad del seed ──
+                    if modo_restriccion:
+                        lnk_disp_seed = dispon_index.elegir_lote_face(
+                            work.loc[seed_idx], bloque=b
+                        )
+                        if lnk_disp_seed is None:
+                            continue   # sin tejido disponible para este seed
+                    else:
+                        lnk_disp_seed = None
                     ranges_try,rule_info=reorder_ranges_for_seed(
                         ranges_mix,mixv,work,seed_idx,params,width_cache)
 
@@ -530,8 +572,22 @@ def run_loteo(df_data, df_cap, params,
                                 work, lote["ROWS"], ranges_mix,
                                 capacity_used, params, width_cache)
                             if not la_ok:
-                                # Este lote dejaría VENCIDOS huérfanos — descartarlo
                                 lote = None
+
+                    # ── Modo restricción: votar por el LOTE FACE que minimice el
+                    #    día máximo global del lote completo ──────────────────
+                    lote_face_elegido = None
+                    plan_tejido_lote: dict = {}   # {lnk: LnkDisponibilidad}
+
+                    if lote is not None and modo_restriccion:
+                        lnk_rows_del_lote = [work.loc[idx] for idx, *_ in lote["ROWS"]]
+                        resultado_lf = dispon_index.elegir_lote_face_lote(
+                            lnk_rows_del_lote, bloque=b
+                        )
+                        if resultado_lf is None:
+                            lote = None   # ningún LOTE FACE puede cubrir el lote completo
+                        else:
+                            lote_face_elegido, plan_tejido_lote = resultado_lf
 
                     if lote is not None:
                         wset=set(lote["FINAL_WIDTHS"])
@@ -560,13 +616,23 @@ def run_loteo(df_data, df_cap, params,
                     next((r for r in ranges if r["RANGO_ID"]==lote["RANGO_ID"]),ranges[0]),
                     "SPLIT_MIN_LBS",params,100.0))
 
+                # Determinar día máximo del lote (para reportes)
+                dia_max_lote_num = 0
+                if modo_restriccion and plan_tejido_lote:
+                    dia_max_lote_num = max(
+                        (v.dia_maximo_lote for v in plan_tejido_lote.values()),
+                        default=-1
+                    )
+                    dia_max_lote_num = max(0, dia_max_lote_num + 1)  # 1-based; 0=hoy
+
                 for idx,lbs_asig,oe,us in lote["ROWS"]:
+                    lnk_id = work.at[idx,"LNK"]
                     detalle.append({
                         "LOTE_ID":lote_id,"ANCHOS_LOTE":anchos_lote_str,
                         "CATEGORIA":lote["CATEGORIA"],"MIX":lote["MIX"],
                         "TELA.CUERPO":tela,"COLOR":work.at[idx,"COLOR"],
                         "TONO":work.at[idx,"TONO"] if "TONO" in work.columns else "",
-                        "LNK":work.at[idx,"LNK"],"PRIORIDAD":work.at[idx,"PRIORIDAD"],
+                        "LNK":lnk_id,"PRIORIDAD":work.at[idx,"PRIORIDAD"],
                         "BLOQUE":work.at[idx,"BLOQUE"],
                         "ANCHO.F.C":float(work.at[idx,"ANCHO.F.C"]),
                         "ANCHO.F.M":float(work.at[idx,"ANCHO.F.M"]),
@@ -584,6 +650,9 @@ def run_loteo(df_data, df_cap, params,
                             "PERMITIR_RANGO_SUPERIOR",params,0)),
                         "SPLIT_MIN_USADO":split_min_used,
                         "DECISION_SCORE":float(best_score),
+                        # Campos de restricción de tejido
+                        "LOTE_FACE":lote_face_elegido or "",
+                        "DIA_MAX_LOTE": dia_max_lote_num if modo_restriccion else None,
                     })
                     prev=float(work.at[idx,"LBS_RESTANTES"])
                     work.at[idx,"LBS_RESTANTES"]=max(0.0,prev-float(lbs_asig))
@@ -593,6 +662,10 @@ def run_loteo(df_data, df_cap, params,
                         if rem>1e-9 and rem+1e-9<split_min_used:
                             work.at[idx,"LBS_SCRAP"]+=rem
                             work.at[idx,"LBS_RESTANTES"]=0.0
+
+                    # ── Confirmar consumo de tejido ─────────────────────────
+                    if modo_restriccion and lnk_id in plan_tejido_lote:
+                        dispon_index.consume(plan_tejido_lote[lnk_id], lote_id)
 
                 det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
                 bloques=[d["BLOQUE"] for d in det_lote]
@@ -611,6 +684,9 @@ def run_loteo(df_data, df_cap, params,
                     "PRIORIDAD_OBJETIVO":prioridad_obj,
                     "QUALITY_LEVEL":quality_level,
                     "BEAM_WIDTH_USADO":beam_w,
+                    # Campos de restricción de tejido
+                    "LOTE_FACE":lote_face_elegido or "",
+                    "DIA_MAX_LOTE": dia_max_lote_num if modo_restriccion else None,
                 })
                 capacity_used[lote["RANGO_ID"]]+=float(lote["TOTAL_LOTE"])
                 lotes_formados+=1
@@ -690,7 +766,14 @@ def run_loteo(df_data, df_cap, params,
     ec=["LNK","TELA.CUERPO","COLOR","MIX","PRIORIDAD","BLOQUE",
         "ANCHO.F.C","ANCHO.F.M","TOTAL","LBS_RESTANTES","LBS_SCRAP"]
     if "TONO" in data.columns: ec.insert(3,"TONO")
-    exced=data[data["LBS_RESTANTES"]>1e-9][[c for c in ec if c in data.columns]].copy()
+    exced_loteados = data[data["LBS_RESTANTES"]>1e-9][[c for c in ec if c in data.columns]].copy()
+
+    # En modo restricción, agregar los LNKs que quedaron excluidos por falta de disponibilidad
+    if modo_restriccion and len(data_sin_dispon) > 0:
+        data_sin_dispon_ec = data_sin_dispon[[c for c in ec if c in data_sin_dispon.columns]].copy()
+        exced = pd.concat([exced_loteados, data_sin_dispon_ec], ignore_index=True)
+    else:
+        exced = exced_loteados
 
     df_det=pd.DataFrame(detalle)
     if len(df_det)>0:
@@ -700,6 +783,7 @@ def run_loteo(df_data, df_cap, params,
 
     df_par=pd.DataFrame([
         ["QUALITY_LEVEL",quality_level],["BEAM_WIDTH",beam_w],
+        ["MODO_RESTRICCION_TEJIDO", 1 if modo_restriccion else 0],
         ["LOOKAHEAD_VENCIDOS",params.get("LOOKAHEAD_VENCIDOS",1)],
         ["PREFERIR_LOTES_SIMPLES",params.get("PREFERIR_LOTES_SIMPLES",0)],
         ["PENALIZACION_ANCHO_EXTRA",params.get("PENALIZACION_ANCHO_EXTRA",1.5)],
@@ -711,15 +795,18 @@ def run_loteo(df_data, df_cap, params,
         ["RULE_ORDER",params.get("RULE_ORDER","")],
         ["PRIORITY_ORDER",params.get("PRIORITY_ORDER","")],
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
-        ["OVERSHOOT_ENABLE",params.get("OVERSHOOT_ENABLE",1)],
-        ["UNDERSHOOT_ENABLE",params.get("UNDERSHOOT_ENABLE",1)],
-        ["OVERSHOOT_TOL_PCT_SMALL",params.get("OVERSHOOT_TOL_PCT_SMALL",0.05)],
-        ["OVERSHOOT_TOL_PCT_LARGE",params.get("OVERSHOOT_TOL_PCT_LARGE",0.02)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
     ],columns=["PARAMETRO","VALOR"])
 
-    return df_det,df_res,exced,df_par,cancelled
+    # Reportes de tejido (vacíos en modo libre)
+    if modo_restriccion:
+        df_detalle_tejido, df_stock_report = dispon_index.build_reports()
+    else:
+        df_detalle_tejido = pd.DataFrame()
+        df_stock_report   = pd.DataFrame()
+
+    return df_det, df_res, exced, df_par, cancelled, df_detalle_tejido, df_stock_report
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(__file__))
 from engine.loader import load_inputs
 from engine.loteo  import run_loteo, build_reports, quality_to_beam, DESCARTE_MSGS
+from engine.disponibilidad import load_disponibilidad
 from ui.charts     import (chart_capacidad_barras, chart_bloques_donut,
                             chart_heatmap_capacidad, chart_completitud_lnk)
 
@@ -32,12 +33,12 @@ for k,v in {
     "profiles":{},"cfg":{},
     "cancel_flag":[False],
     "running":False,
-    # Incrementar cada vez que se cargan tablas externamente (perfil o archivo).
-    # Los data_editors usan este número en su key → Streamlit los recrea desde
-    # cero con los datos nuevos, en lugar de conservar su caché interna.
     "tbl_version": 0,
-    # Hash del último archivo procesado por el file_uploader (independiente de perfiles)
     "_uploader_last_hash": None,
+    # Modo restricción de tejido
+    "modo_restriccion": False,
+    "dispon_index": None,
+    "inv_file_name": None,
 }.items():
     if k not in st.session_state: st.session_state[k]=v
 
@@ -271,6 +272,11 @@ def export_excel(result):
         result["params_out"].to_excel(w,index=False,sheet_name="PARAMETROS")
         for k,df in result["reports"].items():
             if not df.empty: df.to_excel(w,index=False,sheet_name=k[:31])
+        # Hojas de restricción de tejido (solo modo restricción)
+        df_tej = result.get("detalle_tejido", pd.DataFrame())
+        df_stk = result.get("stock_tejido",   pd.DataFrame())
+        if not df_tej.empty: df_tej.to_excel(w,index=False,sheet_name="DETALLE_TEJIDO")
+        if not df_stk.empty: df_stk.to_excel(w,index=False,sheet_name="STOCK_TEJIDO")
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -278,6 +284,57 @@ def export_excel(result):
 # ══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("🧶 NV2 Loteo")
+    st.divider()
+
+    # ── Modo de loteo ──────────────────────────────────────────────────────
+    st.subheader("🔀 Modo de loteo")
+    modo_sel = st.radio(
+        "Selecciona el modo:",
+        options=["🟢 Modo Libre", "🔵 Modo Restricción de Tejido"],
+        index=1 if st.session_state.modo_restriccion else 0,
+        help=(
+            "**Modo Libre:** loteo sin restricción de disponibilidad de tela (comportamiento original).\n\n"
+            "**Modo Restricción:** solo forma lotes con tela disponible (inventario en mano + "
+            "producción planeada por día). Requiere cargar el archivo ANALISIS_INV."
+        ),
+        key="modo_radio",
+    )
+    nuevo_modo = (modo_sel == "🔵 Modo Restricción de Tejido")
+    if nuevo_modo != st.session_state.modo_restriccion:
+        st.session_state.modo_restriccion = nuevo_modo
+        st.session_state.dispon_index = None   # reset al cambiar de modo
+
+    # Uploader de ANALISIS_INV (solo en modo restricción)
+    if st.session_state.modo_restriccion:
+        st.markdown(
+            '<div class="info-note">📋 Sube el archivo <strong>ANALISIS_INV</strong> (hoja Export) '
+            'con el inventario y plan de tejido de los próximos 10 días.</div>',
+            unsafe_allow_html=True,
+        )
+        inv_up = st.file_uploader(
+            "ANALISIS_INV (.xlsx)",
+            type=["xlsx","xlsm"],
+            key="inv_uploader",
+        )
+        if inv_up is not None:
+            try:
+                dispon = load_disponibilidad(inv_up.read())
+                st.session_state.dispon_index = dispon
+                st.session_state.inv_file_name = inv_up.name
+                st.success(f"✅ {inv_up.name} — {len(dispon.stock):,} registros de disponibilidad cargados.")
+            except Exception as e:
+                st.error(f"Error leyendo ANALISIS_INV: {e}")
+                st.session_state.dispon_index = None
+
+        if st.session_state.dispon_index is not None and st.session_state.inv_file_name:
+            st.caption(f"📂 Activo: {st.session_state.inv_file_name}")
+        elif st.session_state.dispon_index is None:
+            st.markdown(
+                '<div class="warn-note">⚠️ Sin ANALISIS_INV cargado. El loteo en modo restricción '
+                'no podrá ejecutarse.</div>',
+                unsafe_allow_html=True,
+            )
+
     st.divider()
     # Profiles
     st.subheader("💾 Perfiles")
@@ -783,9 +840,20 @@ if run_btn and can_run:
         )
 
     try:
-        df_det,df_res,df_exc,df_par,cancelled=run_loteo(
+        # Validar modo restricción antes de correr
+        _dispon = None
+        if st.session_state.modo_restriccion:
+            if st.session_state.dispon_index is None:
+                st.error("⚠️ Modo Restricción activo pero no hay ANALISIS_INV cargado. "
+                         "Sube el archivo en el sidebar antes de ejecutar.")
+                st.session_state.running = False
+                st.stop()
+            _dispon = st.session_state.dispon_index
+
+        df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock=run_loteo(
             df_data2,df_cap2,params2,progress_callback=cb,
-            cancel_flag=st.session_state.cancel_flag)
+            cancel_flag=st.session_state.cancel_flag,
+            dispon_index=_dispon)
         _elapsed_total = (datetime.now() - _run_start).seconds
         _tm, _ts = divmod(_elapsed_total, 60)
         if cancelled:
@@ -801,8 +869,10 @@ if run_btn and can_run:
             "comentario":st.session_state.get("run_comment",""),
             "quality_used":_ql,
             "tiempo_seg": (datetime.now()-_run_start).seconds,
+            "modo": "Restricción" if st.session_state.modo_restriccion else "Libre",
             "detalle":df_det,"resumen":df_res,"excedentes":df_exc,
             "params_out":df_par,
+            "detalle_tejido":df_tej,"stock_tejido":df_stock,
             "reports":build_reports(df_data2,df_cap2,df_det,df_res),
             "cancelled":cancelled}
     st.session_state.last_result=result
@@ -845,6 +915,14 @@ lnk_df=reports.get("LNK_COMPLETITUD",pd.DataFrame())
 if res.get("cancelled"):
     st.warning("⚠️ Corrida cancelada — resultados parciales")
 
+_modo_badge = res.get("modo","Libre")
+_badge_color = "#3b82f6" if _modo_badge == "Restricción" else "#16a34a"
+st.markdown(
+    f'<span style="background:{_badge_color};color:#fff;padding:3px 10px;border-radius:12px;'
+    f'font-size:.82rem;font-weight:600;">Modo: {_modo_badge}</span>',
+    unsafe_allow_html=True,
+)
+
 _comment=res.get("comentario","")
 _ql_used=res.get("quality_used","?")
 _t_seg=res.get("tiempo_seg",0)
@@ -865,9 +943,10 @@ k6.metric("LNKs completos",
           f"{(lnk_df['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lnk_df)*100) if not lnk_df.empty else 0:.1f}%")
 k7.metric("Cap. perdida",   fmt(df_res["CAPACIDAD_PERDIDA"].sum() if not df_res.empty else 0))
 
-tab_g,tab_d,tab_r,tab_l,tab_c,tab_e=st.tabs([
+tab_g,tab_d,tab_r,tab_l,tab_c,tab_e,tab_t=st.tabs([
     "📊 Gráficas","📋 Detalle Lotes","📄 Resumen",
-    "🔍 Decision Log","🔁 Comparar Corridas","⚠️ Excedentes"])
+    "🔍 Decision Log","🔁 Comparar Corridas","⚠️ Excedentes",
+    "🧵 Disponibilidad Tejido"])
 
 with tab_g:
     cap_df  = reports.get("CAPACIDAD_X_CATEG", pd.DataFrame())
@@ -1095,6 +1174,7 @@ with tab_c:
                 "Cap. Perdida":fmt(s["CAPACIDAD_PERDIDA"].sum() if not s.empty else 0),
                 "LNKs %":f"{(lc['ESTADO'].isin(['COMPLETO','COMPLETO (SCRAP)']).sum()/len(lc)*100) if not lc.empty else 0:.1f}%",
                 "Cancelada":"Sí" if r.get("cancelled") else "No",
+                        "Modo": r.get("modo","Libre"),
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         st.subheader("Descargar corridas")
@@ -1111,6 +1191,69 @@ with tab_e:
     else:
         st.warning(f"⚠️ {len(df_exc):,} filas sin asignar")
         st.dataframe(df_exc,use_container_width=True,height=420)
+
+with tab_t:
+    df_tej = res.get("detalle_tejido", pd.DataFrame())
+    df_stk = res.get("stock_tejido",   pd.DataFrame())
+
+    if res.get("modo","Libre") == "Libre":
+        st.info("ℹ️ Este resultado se generó en **Modo Libre**. "
+                "Activa el **Modo Restricción de Tejido** en el sidebar y sube el "
+                "ANALISIS_INV para ver el plan de disponibilidad de tejido.")
+    elif df_tej.empty:
+        st.info("Sin movimientos de tejido registrados.")
+    else:
+        # ── Métricas rápidas ──────────────────────────────────────────────
+        modo_lote = res.get("modo","Libre")
+        st.markdown(f"**Modo:** {modo_lote}")
+
+        lbs_inv  = df_tej[df_tej["FUENTE"]=="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
+        lbs_dias = df_tej[df_tej["FUENTE"]!="INV MANO"]["LBS_ASIGNADAS"].sum() if not df_tej.empty else 0
+        dia_max_global = int(df_tej["DIA_MAX_LOTE"].max()) if "DIA_MAX_LOTE" in df_tej.columns and not df_tej.empty else 0
+        label_dia = "INV MANO (hoy)" if dia_max_global == 0 else f"DIA {dia_max_global}"
+
+        mc1,mc2,mc3 = st.columns(3)
+        mc1.metric("LBS de Inventario en Mano", f"{lbs_inv:,.0f}")
+        mc2.metric("LBS de Días Futuros",        f"{lbs_dias:,.0f}")
+        mc3.metric("Día más tardío del plan",     label_dia)
+
+        # ── Sub-tabs ──────────────────────────────────────────────────────
+        st1, st2 = st.tabs(["📦 Detalle por lote/componente", "📊 Stock de tejido"])
+
+        with st1:
+            st.caption("Una fila por cada componente de tejido asignado a un lote.")
+            # Filtros
+            fc1,fc2,fc3 = st.columns(3)
+            _lotes_f  = fc1.multiselect("LOTE_ID",  sorted(df_tej["LOTE_ID"].unique()),  key="tf_lote")
+            _estilos_f= fc2.multiselect("ESTILO C", sorted(df_tej["ESTILO C"].unique()), key="tf_estilo")
+            _fuentes_f= fc3.multiselect("FUENTE",   sorted(df_tej["FUENTE"].unique()),   key="tf_fuente")
+
+            df_tej_f = df_tej.copy()
+            if _lotes_f:   df_tej_f = df_tej_f[df_tej_f["LOTE_ID"].isin(_lotes_f)]
+            if _estilos_f: df_tej_f = df_tej_f[df_tej_f["ESTILO C"].isin(_estilos_f)]
+            if _fuentes_f: df_tej_f = df_tej_f[df_tej_f["FUENTE"].isin(_fuentes_f)]
+
+            st.dataframe(df_tej_f, use_container_width=True, height=420)
+
+        with st2:
+            st.caption(
+                "Inventario inicial vs. asignado vs. remanente por (ESTILO C, DG, LOTE FACE). "
+                "Columnas INI/ASIG/REM para cada fuente."
+            )
+            # Mostrar solo columnas resumen por defecto; usuario puede ver todo
+            cols_res = ["ESTILO C","DG","LOTE FACE","TOTAL_INICIAL","TOTAL_ASIGNADO","TOTAL_REMANENTE"]
+            cols_show = [c for c in cols_res if c in df_stk.columns]
+            expand = st.toggle("Ver todas las columnas (por fuente)", value=False, key="stk_expand")
+            df_show = df_stk if expand else df_stk[cols_show]
+            # Highlight filas con asignación > 0
+            st.dataframe(
+                df_show.style.apply(
+                    lambda r: ["background-color: #eff6ff" if r.get("TOTAL_ASIGNADO",0)>0 else "" for _ in r],
+                    axis=1
+                ) if "TOTAL_ASIGNADO" in df_show.columns else df_show,
+                use_container_width=True,
+                height=500,
+            )
 
 st.divider()
 ts=res["ts"].replace(":","").replace(" ","_").replace("-","")
