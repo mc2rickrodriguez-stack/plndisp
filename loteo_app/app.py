@@ -5,6 +5,14 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+# ── VERSION FINGERPRINT (diagnóstico) ─────────────────────────────────────
+import inspect
+from engine import loteo as _loteo_mod
+_LOTEO_FILE = inspect.getfile(_loteo_mod)
+_HAS_PREFILTER = hasattr(_loteo_mod, '__file__') and 'lnks_sin_dispon' in open(_loteo_mod.__file__).read()
+# ──────────────────────────────────────────────────────────────────────────
+
 from engine.loader import load_inputs
 from engine.loteo  import run_loteo, build_reports, quality_to_beam, DESCARTE_MSGS
 from engine.disponibilidad import load_disponibilidad
@@ -284,6 +292,12 @@ def export_excel(result):
 # ══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.title("🧶 NV2 Loteo")
+    # ── Diagnóstico de versión ──────────────────────────────────────────
+    if _HAS_PREFILTER:
+        st.success("✅ v5 activa — pre-filtro tejido OK")
+    else:
+        st.error(f"❌ loteo.py SIN pre-filtro — archivo: {_LOTEO_FILE}")
+    # ───────────────────────────────────────────────────────────────────
     st.divider()
 
     # ── Modo de loteo ──────────────────────────────────────────────────────
