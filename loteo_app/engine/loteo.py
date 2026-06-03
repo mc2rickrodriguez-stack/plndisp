@@ -442,16 +442,22 @@ def run_loteo(df_data, df_cap, params,
         width_cache[idx]=ws
 
     # ── Pre-filtro de disponibilidad (modo restricción) ──────────────────
-    # Marcamos filas sin disponibilidad para excluirlas del loteo.
-    # Se evalúa una vez aquí — O(n) con lookup O(1).
+    # Filtramos por LNK completo: si CUALQUIER fila del LNK no tiene
+    # disponibilidad, TODAS las filas de ese LNK van a excedentes.
+    # Usar la primera fila del LNK para evaluar (mismos componentes en todas).
     if modo_restriccion:
-        sin_dispon = set()
+        lnks_sin_dispon: set = set()
+        # Evaluar un LNK una sola vez (la primera fila que aparezca)
+        lnks_vistos: set = set()
         for idx in data.index:
+            lnk_id = data.at[idx, "LNK"]
+            if lnk_id in lnks_vistos:
+                continue
+            lnks_vistos.add(lnk_id)
             if not dispon_index.lnk_tiene_disponibilidad(data.loc[idx]):
-                sin_dispon.add(idx)
-        # Esas filas van directo a excedentes (LBS_RESTANTES queda intacto)
-        # Se excluyen poniendo LBS_RESTANTES = 0 en la copia de trabajo
-        # SOLO para el loop de loteo; las guardaremos al final como excedentes.
+                lnks_sin_dispon.add(lnk_id)
+
+        sin_dispon = data[data["LNK"].isin(lnks_sin_dispon)].index
         data_sin_dispon = data.loc[list(sin_dispon)].copy()
         data_con_dispon = data.drop(index=list(sin_dispon)).copy()
     else:
@@ -580,7 +586,29 @@ def run_loteo(df_data, df_cap, params,
                     plan_tejido_lote: dict = {}   # {lnk: LnkDisponibilidad}
 
                     if lote is not None and modo_restriccion:
-                        lnk_rows_del_lote = [work.loc[idx] for idx, *_ in lote["ROWS"]]
+                        # Construir filas con LBS proporcionales al lote.
+                        # Un LNK puede tener LB.CUERPO = 26,400 (total del plan)
+                        # pero en este lote solo se le asignan 3,300 LBS.
+                        # Escalamos LB.* por el ratio (lbs_asig / TOTAL) para que
+                        # check_lnk reserve solo lo que este lote necesita.
+                        lnk_rows_del_lote = []
+                        seen_lnks: set = set()
+                        for idx, lbs_asig, *_ in lote["ROWS"]:
+                            lnk_id = work.at[idx, "LNK"]
+                            if lnk_id in seen_lnks:
+                                continue   # mismo LNK en dos filas (split prioridad)
+                            seen_lnks.add(lnk_id)
+                            row = work.loc[idx].copy()
+                            total_lnk = float(row.get("TOTAL", 0)) or 1.0
+                            ratio = min(1.0, float(lbs_asig) / total_lnk)
+                            for lbs_col in ["LB.CUERPO", "LB.MANGAS", "LB.RIB", "LB.POCKET"]:
+                                if lbs_col in row.index:
+                                    try:
+                                        row[lbs_col] = float(row[lbs_col]) * ratio
+                                    except Exception:
+                                        pass
+                            lnk_rows_del_lote.append(row)
+
                         resultado_lf = dispon_index.elegir_lote_face_lote(
                             lnk_rows_del_lote, bloque=b
                         )
