@@ -625,11 +625,12 @@ def run_loteo(df_data, df_cap, params,
                                       wset,params,r if 'r' in dir() else ranges_mix[0])
                         if sc>best_score:
                             best_score=sc; best_lote=lote
-                            best_pack=(lote,rule_info,prioridad_obj,best_score)
+                            best_pack=(lote,rule_info,prioridad_obj,best_score,
+                                       lote_face_elegido,plan_tejido_lote)
 
                 if best_lote is None: blocked.add(b); continue
 
-                lote,rule_info,prioridad_obj,best_score=best_pack
+                lote,rule_info,prioridad_obj,best_score,lote_face_elegido,plan_tejido_lote=best_pack
                 lote_id=f"L{lote_id_global:06d}"; lote_id_global+=1
                 anchos_lote=lote["FINAL_WIDTHS"]
                 anchos_lote_str=str(anchos_lote)
