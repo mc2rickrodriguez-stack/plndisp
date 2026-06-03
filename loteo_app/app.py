@@ -1300,4 +1300,8 @@ with st.expander("⚗️  Sección 5 — LOTEO", expanded=True):
                      file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      use_container_width=True)
-  with st.expander("⚗️  Sección 6 — Prueba", expanded=false):
+  
+with st.expander("📋  Sección prueba", expanded=True):
+    st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
+                'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
+                unsafe_allow_html=True)
