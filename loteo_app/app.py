@@ -766,9 +766,9 @@ with st.expander("🔗  Sección 4 — Reglas de Combinación y Restricciones", 
 
 
 # (seccion_solver)
-with st.expander("📁  Sección 5 — SOLVER", expanded=True):
+with st.expander("⚗️  Sección 5 — LOTEO", expanded=True):
   # ── Botón principal ────────────────────────────────────────────────────────
-  st.divider()
+#  st.divider()
   can_run=(st.session_state.df_data is not None and
            st.session_state.raw_file_bytes is not None and
            st.session_state.cap_applied)
@@ -1300,3 +1300,4 @@ with st.expander("📁  Sección 5 — SOLVER", expanded=True):
                      file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      use_container_width=True)
+with st.expander("⚗️  Sección 6 — Prueba", expanded=false):
