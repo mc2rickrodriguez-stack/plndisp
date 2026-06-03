@@ -663,9 +663,17 @@ def run_loteo(df_data, df_cap, params,
                             work.at[idx,"LBS_SCRAP"]+=rem
                             work.at[idx,"LBS_RESTANTES"]=0.0
 
-                    # ── Confirmar consumo de tejido ─────────────────────────
-                    if modo_restriccion and lnk_id in plan_tejido_lote:
-                        dispon_index.consume(plan_tejido_lote[lnk_id], lote_id)
+                # ── Confirmar consumo de tejido UNA VEZ por LNK único ──────
+                # Un LNK puede aparecer múltiples veces en ROWS (splits de
+                # prioridad). consume() debe llamarse una sola vez por LNK
+                # para no doble-descontar el stock ni duplicar el reporte.
+                if modo_restriccion and plan_tejido_lote:
+                    lnks_consumidos: set = set()
+                    for idx, *_ in lote["ROWS"]:
+                        lnk_id = work.at[idx, "LNK"]
+                        if lnk_id not in lnks_consumidos and lnk_id in plan_tejido_lote:
+                            dispon_index.consume(plan_tejido_lote[lnk_id], lote_id)
+                            lnks_consumidos.add(lnk_id)
 
                 det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
                 bloques=[d["BLOQUE"] for d in det_lote]
