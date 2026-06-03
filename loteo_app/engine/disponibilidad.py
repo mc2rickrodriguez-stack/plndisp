@@ -483,6 +483,8 @@ class DisponibilidadIndex:
         # ── Reporte de stock (inicial / asignado / remanente) ────────────────
         rows_stock = []
         for (estilo, dg, lf), entry in self.stock.items():
+            if not estilo:   # filtrar filas de total (ESTILO C vacío)
+                continue
             row_base = {"ESTILO C": estilo, "DG": dg, "LOTE FACE": lf}
             total_ini = 0.0; total_used = 0.0
             for fuente in FUENTES_ORD:
@@ -503,6 +505,54 @@ class DisponibilidadIndex:
         ).reset_index(drop=True)
 
         return df_det, df_stock
+
+    def build_tejido_ocioso(self, df_plan: pd.DataFrame) -> pd.DataFrame:
+        """
+        Retorna tejido en ANALISIS_INV que tiene disponibilidad pero
+        ningún LNK en el plan mensual lo demanda (tejido ocioso).
+
+        Columnas: ESTILO C, DG, LOTE FACE, INV MANO, DIA 1..10, LBS_TOTAL
+        """
+        # Pares (TELA, DG) con demanda real en el plan
+        demanda: set = set()
+        for _, row in df_plan.iterrows():
+            for tcol, dgcol in [
+                ("TELA.CUERPO","DG.CUERPO"),("TELA.MANGAS","DG.MANGAS"),
+                ("TELA.RIB","DG.RIB"),("TELA.POCKET","DG.POCKET"),
+            ]:
+                tela = _norm(row.get(tcol, ""))
+                try:
+                    dg = float(row.get(dgcol, 0))
+                except Exception:
+                    dg = 0.0
+                if tela and tela != "-" and dg > 0:
+                    demanda.add((tela, dg))
+
+        rows = []
+        for (estilo, dg, lf), entry in self.stock.items():
+            if not estilo:                        # filtrar totales
+                continue
+            if (estilo, dg) in demanda:           # tiene demanda → no es ocioso
+                continue
+            total_ini = sum(entry.get(f, 0.0) for f in FUENTES_ORD)
+            if total_ini <= 0:
+                continue
+            row = {
+                "ESTILO C":  estilo,
+                "DG":        dg,
+                "LOTE FACE": lf,
+                "INV MANO":  entry.get(FUENTE_INV, 0.0),
+            }
+            for d in DIA_COLS:
+                row[d] = entry.get(d, 0.0)
+            row["LBS_TOTAL"] = total_ini
+            rows.append(row)
+
+        if not rows:
+            return pd.DataFrame(columns=["ESTILO C","DG","LOTE FACE","INV MANO","LBS_TOTAL"])
+
+        df = pd.DataFrame(rows).sort_values("LBS_TOTAL", ascending=False).reset_index(drop=True)
+        return df
 
 
 # ── Función de carga pública ──────────────────────────────────────────────────
