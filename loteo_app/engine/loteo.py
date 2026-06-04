@@ -440,6 +440,7 @@ def _lookahead_vencidos_ok(work, lote_rows, ranges_mix, capacity_used_snap, para
 
 
 # ── Main run_loteo ────────────────────────────────────────────────────────────
+_LOTEO_VERSION = "v5.3-vencidos-priority"  # marker para diagnostico
 def run_loteo(df_data, df_cap, params,
               progress_callback=None, cancel_flag=None,
               dispon_index: "DisponibilidadIndex | None" = None):
@@ -892,6 +893,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
+        ["LOTEO_VERSION","v5.3-vencidos-priority"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
