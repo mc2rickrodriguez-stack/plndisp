@@ -415,7 +415,28 @@ def _lookahead_vencidos_ok(work, lote_rows, ranges_mix, capacity_used_snap, para
         return True  # sin capacidad disponible de todos modos, no bloqueamos
 
     # ¿Las LBS vencidas restantes alcanzan el mínimo?
-    return lbs_vencidos_restantes >= min_rango - 1e-6
+    # IMPORTANTE: los vencidos pueden completar el mínimo mezclándose con AHEAD
+    # (mezcla permitida según COMBINACIONES_PRIORIDAD). Por lo tanto, el look-ahead
+    # debe verificar si los vencidos + AHEAD disponibles pueden formar otro lote,
+    # no solo si los vencidos solos lo logran.
+    if lbs_vencidos_restantes >= min_rango - 1e-6:
+        return True   # vencidos solos ya alcanzan — ok
+
+    # Calcular LBS AHEAD disponibles en el mismo grupo de trabajo
+    allowed_pairs = params.get("MIX_ALLOWED", set())
+    lbs_ahead_disp = 0.0
+    for idx in work.index:
+        if idx in lote_indices:
+            continue
+        bloque = work.at[idx, "BLOQUE"]
+        if not can_mix_blocks("VENCIDOS", bloque, allowed_pairs):
+            continue
+        if bloque == "VENCIDOS":
+            continue   # ya contado arriba
+        lbs_ahead_disp += max(0.0, float(work.at[idx, "LBS_RESTANTES"]))
+
+    # Si vencidos + AHEAD pueden completar el mínimo, el lote es seguro
+    return (lbs_vencidos_restantes + lbs_ahead_disp) >= min_rango - 1e-6
 
 
 # ── Main run_loteo ────────────────────────────────────────────────────────────
