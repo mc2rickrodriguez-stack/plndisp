@@ -483,7 +483,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════
-st.markdown("## 🧶 NV2 Loteo Tintorería")
+st.markdown("## 🧶 NV2 Loteo Tintorería V5")
 st.caption("Optimización · Lotes · Asignación de Pedidos")
 
 # ── Sección 1: Carga ──────────────────────────────────────────────────────
