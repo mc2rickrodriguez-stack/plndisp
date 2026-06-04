@@ -860,6 +860,20 @@ def run_loteo(df_data, df_cap, params,
     if modo_restriccion:
         df_detalle_tejido, df_stock_report = dispon_index.build_reports()
         df_tejido_ocioso = dispon_index.build_tejido_ocioso(df_data)
+
+        # Enriquecer DETALLE_TEJIDO con columnas de contexto
+        if not df_detalle_tejido.empty:
+            # LBS_TOTAL_LOTE: suma de LBS asignadas por lote en tejido
+            lbs_x_lote = df_detalle_tejido.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
+            df_detalle_tejido = df_detalle_tejido.merge(lbs_x_lote, on="LOTE_ID", how="left")
+            # PRIORIDAD_LOTE: bloque dominante del lote tomado de DETALLE_LOTES
+            if not df_det.empty and "LOTE_ID" in df_det.columns and "BLOQUE" in df_det.columns:
+                prio_map = (
+                    df_det.groupby("LOTE_ID")["BLOQUE"]
+                    .agg(lambda x: x.value_counts().idxmax())
+                    .rename("PRIORIDAD_LOTE")
+                )
+                df_detalle_tejido = df_detalle_tejido.merge(prio_map, on="LOTE_ID", how="left")
     else:
         df_detalle_tejido = pd.DataFrame()
         df_stock_report   = pd.DataFrame()
