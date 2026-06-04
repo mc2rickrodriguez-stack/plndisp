@@ -11,7 +11,7 @@ from engine.disponibilidad import load_disponibilidad
 from ui.charts     import (chart_capacidad_barras, chart_bloques_donut,
                             chart_heatmap_capacidad, chart_completitud_lnk)
 
-st.set_page_config(page_title="NV2 Loteo V4", page_icon="🧶", layout="wide",
+st.set_page_config(page_title="NV2 Loteo", page_icon="🧶", layout="wide",
                    initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
@@ -483,7 +483,7 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════
-st.markdown("## 🧶 NV2 Loteo Tintorería V5")
+st.markdown("## 🧶 NV2 Loteo Tintorería")
 st.caption("Optimización · Lotes · Asignación de Pedidos")
 
 # ── Sección 1: Carga ──────────────────────────────────────────────────────
@@ -1275,21 +1275,14 @@ with tab_t:
             if _dias_f and "DIA_LOTE" in df_tej_f.columns:
                 df_tej_f = df_tej_f[df_tej_f["DIA_LOTE"].isin(_dias_f)]
 
-            # Columna LBS_TOTAL_LOTE
+            # LBS_TOTAL_LOTE y PRIORIDAD_LOTE ya vienen del engine
+            # Recalcular LBS_TOTAL_LOTE sobre el filtro actual
             lbs_por_lote = df_tej_f.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
+            if "LBS_TOTAL_LOTE" in df_tej_f.columns:
+                df_tej_f = df_tej_f.drop(columns=["LBS_TOTAL_LOTE"])
             df_tej_f = df_tej_f.merge(lbs_por_lote, on="LOTE_ID", how="left")
 
-            # Columna PRIORIDAD — tomada del DETALLE_LOTES (bloque dominante del lote)
-            _df_det_ref = res.get("detalle", pd.DataFrame())
-            if not _df_det_ref.empty and "LOTE_ID" in _df_det_ref.columns and "BLOQUE" in _df_det_ref.columns:
-                prio_map = (
-                    _df_det_ref.groupby("LOTE_ID")["BLOQUE"]
-                    .agg(lambda x: x.value_counts().idxmax())
-                    .rename("PRIORIDAD_LOTE")
-                )
-                df_tej_f = df_tej_f.merge(prio_map, on="LOTE_ID", how="left")
-
-            # Reordenar columnas: LBS_TOTAL_LOTE y PRIORIDAD_LOTE junto a LBS_ASIGNADAS
+            # Reordenar: LBS_TOTAL_LOTE y PRIORIDAD_LOTE junto a LBS_ASIGNADAS
             cols = list(df_tej_f.columns)
             for col in ["LBS_TOTAL_LOTE", "PRIORIDAD_LOTE"]:
                 if col in cols and "LBS_ASIGNADAS" in cols:
