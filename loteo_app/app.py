@@ -1278,7 +1278,7 @@ with tab_t:
             # Columna LBS_TOTAL_LOTE
             lbs_por_lote = df_tej_f.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
             df_tej_f = df_tej_f.merge(lbs_por_lote, on="LOTE_ID", how="left")
-
+            df_det = res["detalle"]
             # Columna PRIORIDAD — tomada del DETALLE_LOTES (bloque dominante del lote)
             if not df_det.empty and "LOTE_ID" in df_det.columns and "BLOQUE" in df_det.columns:
                 prio_map = (
