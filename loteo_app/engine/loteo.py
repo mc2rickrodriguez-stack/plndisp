@@ -440,7 +440,6 @@ def _lookahead_vencidos_ok(work, lote_rows, ranges_mix, capacity_used_snap, para
 
 
 # ── Main run_loteo ────────────────────────────────────────────────────────────
-_LOTEO_VERSION = "v5.3-vencidos-priority"  # marker para diagnostico
 def run_loteo(df_data, df_cap, params,
               progress_callback=None, cancel_flag=None,
               dispon_index: "DisponibilidadIndex | None" = None):
@@ -765,6 +764,8 @@ def run_loteo(df_data, df_cap, params,
 
                 det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
                 bloques=[d["BLOQUE"] for d in det_lote]
+                bloques_unicos = sorted(set(bloques), key=lambda b: {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}.get(b,9))
+                mezcla_prioridad = "+".join(bloques_unicos) if bloques_unicos else ""
                 resumen.append({
                     "LOTE_ID":lote_id,"ANCHOS_LOTE":anchos_lote_str,
                     "CATEGORIA":lote["CATEGORIA"],"MIX":lote["MIX"],
@@ -775,6 +776,7 @@ def run_loteo(df_data, df_cap, params,
                     "SKU_DISTINTOS":len({d["LNK"] for d in det_lote}),
                     "ANCHOS_UNICOS":len(anchos_lote),
                     "BLOQUE_DOMINANTE":max(set(bloques),key=bloques.count) if bloques else "",
+                    "MEZCLA_PRIORIDAD":mezcla_prioridad,
                     "REGLA_DOMINANTE":regla_final,
                     "PRIORIDAD_FINAL":float(lote["MAXIMO"]),
                     "PRIORIDAD_OBJETIVO":prioridad_obj,
@@ -835,6 +837,8 @@ def run_loteo(df_data, df_cap, params,
                         work.at[idx,"LBS_RESTANTES"]=max(0.0,float(work.at[idx,"LBS_RESTANTES"])-float(lbs_asig))
                     det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
                     bloques=[d["BLOQUE"] for d in det_lote]
+                    bloques_unicos = sorted(set(bloques), key=lambda b: {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}.get(b,9))
+                    mezcla_prioridad = "+".join(bloques_unicos) if bloques_unicos else ""
                     resumen.append({
                         "LOTE_ID":lote_id,"ANCHOS_LOTE":anchos_lote_str,
                         "CATEGORIA":intento["CATEGORIA"],"MIX":intento["MIX"],
@@ -845,6 +849,7 @@ def run_loteo(df_data, df_cap, params,
                         "SKU_DISTINTOS":len({d["LNK"] for d in det_lote}),
                         "ANCHOS_UNICOS":len(anchos_lote),
                         "BLOQUE_DOMINANTE":max(set(bloques),key=bloques.count) if bloques else "",
+                        "MEZCLA_PRIORIDAD":mezcla_prioridad,
                         "REGLA_DOMINANTE":"RESCUE",
                         "PRIORIDAD_FINAL":float(intento["MAXIMO"]),
                         "PRIORIDAD_OBJETIVO":None,
@@ -893,7 +898,6 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.3-vencidos-priority"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
