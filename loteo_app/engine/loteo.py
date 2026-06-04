@@ -235,10 +235,23 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
         if "TONO" in work.columns:
             rt = up(work.at[idx,"TONO"]) if pd.notna(work.at[idx,"TONO"]) else ""
             if rt!=seed_tono: return False,"TONO_DISTINTO"
-        if len(lote_lnks|{work.at[idx,"LNK"]})>max_sku: return False,"MAX_SKU_EXCEDIDO"
-        b=work.at[idx,"BLOQUE"]
-        for eb in lote_blocks:
-            if not can_mix_blocks(eb,b,allowed_pairs): return False,"BLOQUE_INCOMPATIBLE"
+        lnk_candidato = work.at[idx,"LNK"]
+        if len(lote_lnks|{lnk_candidato})>max_sku: return False,"MAX_SKU_EXCEDIDO"
+        b = work.at[idx,"BLOQUE"]
+        # Si el LNK ya está en el lote con otro bloque, usar el bloque más urgente
+        # para la verificación de compatibilidad (evita mezclar VENCIDOS con AHEAD2
+        # aunque el LNK tenga filas con ambas prioridades)
+        bloque_efectivo = b
+        if lnk_candidato in lote_lnks:
+            urgencia = {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}
+            bloques_del_lnk = [lote_blocks[i] for i,(_idx,*_) in enumerate(lote_rows)
+                               if work.at[_idx,"LNK"]==lnk_candidato]
+            if bloques_del_lnk:
+                bloque_efectivo = min([b]+bloques_del_lnk, key=lambda x: urgencia.get(x,9))
+        # Verificar contra todos los bloques únicos del lote
+        bloques_en_lote = set(lote_blocks)
+        for eb in bloques_en_lote:
+            if not can_mix_blocks(eb, bloque_efectivo, allowed_pairs): return False,"BLOQUE_INCOMPATIBLE"
         wc = lote_widths + width_cache.get(idx,[])
         if not valid_width_group(wc,min_diff,max_diff,max_widths): return False,"ANCHO_INCOMPATIBLE"
         if lote_lbs+lbs_to_add>max_allowed+1e-9: return False,"CAPACIDAD_LOTE"
@@ -795,12 +808,37 @@ def run_loteo(df_data, df_cap, params,
 
         # ── FIX 3: Rescue pass — mono-SKU lots for stranded LNKs ────────────
         # After main loop, any row still with LBS_RESTANTES > 0 tries a
-        # single-SKU lote in ANY available range, ignoring SPLIT_MIN entirely.
+        # single-SKU lote in ANY available range.
+        # SPLIT_MIN applies: residues smaller than SPLIT_MIN go to SCRAP,
+        # UNLESS the LNK's original total was already below SPLIT_MIN
+        # (naturally small orders are always rescued regardless).
         work["LBS_RESTANTES"]=pd.to_numeric(work["LBS_RESTANTES"],errors="coerce").fillna(0.0)
+
+        # Determine global split_min for rescue (use smallest per-range value)
+        global_split_min = float(params.get("SPLIT_MIN_LBS", 100.0))
+        try:
+            global_split_min = min(
+                float(rango_param(r, "SPLIT_MIN_LBS", params, 100.0))
+                for r in ranges_mix
+            )
+        except Exception:
+            pass
+
         stranded=work[work["LBS_RESTANTES"]>1e-9].sort_values("LBS_RESTANTES",ascending=False)
         for seed_idx in stranded.index:
             if cancel_flag and cancel_flag[0]: break
-            if float(work.at[seed_idx,"LBS_RESTANTES"])<=1e-9: continue
+            lbs_restante = float(work.at[seed_idx,"LBS_RESTANTES"])
+            if lbs_restante <= 1e-9: continue
+
+            # If residue is below SPLIT_MIN, scrap it — unless the original
+            # total was already small (naturally small LNK)
+            orig_total = float(work.at[seed_idx,"TOTAL"]) if "TOTAL" in work.columns else lbs_restante
+            if lbs_restante < global_split_min and orig_total >= global_split_min:
+                # This is a residue from a large LNK — scrap it
+                work.at[seed_idx,"LBS_SCRAP"] = work.at[seed_idx,"LBS_SCRAP"] + lbs_restante
+                work.at[seed_idx,"LBS_RESTANTES"] = 0.0
+                continue
+
             for r in sorted(ranges_mix, key=lambda x: -float(x["MAXIMO"])):
                 if capacity_used[r["RANGO_ID"]]>=r["CAPACIDAD"]-1e-6: continue
                 intento,_=intentar_lote_para_rango(
