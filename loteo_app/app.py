@@ -11,7 +11,7 @@ from engine.disponibilidad import load_disponibilidad
 from ui.charts     import (chart_capacidad_barras, chart_bloques_donut,
                             chart_heatmap_capacidad, chart_completitud_lnk)
 
-st.set_page_config(page_title="NV2 Loteo", page_icon="🧶", layout="wide",
+st.set_page_config(page_title="NV2 Loteo V4", page_icon="🧶", layout="wide",
                    initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
@@ -1278,11 +1278,12 @@ with tab_t:
             # Columna LBS_TOTAL_LOTE
             lbs_por_lote = df_tej_f.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
             df_tej_f = df_tej_f.merge(lbs_por_lote, on="LOTE_ID", how="left")
-            df_det = res["detalle"]
+
             # Columna PRIORIDAD — tomada del DETALLE_LOTES (bloque dominante del lote)
-            if not df_det.empty and "LOTE_ID" in df_det.columns and "BLOQUE" in df_det.columns:
+            _df_det_ref = res.get("detalle", pd.DataFrame())
+            if not _df_det_ref.empty and "LOTE_ID" in _df_det_ref.columns and "BLOQUE" in _df_det_ref.columns:
                 prio_map = (
-                    df_det.groupby("LOTE_ID")["BLOQUE"]
+                    _df_det_ref.groupby("LOTE_ID")["BLOQUE"]
                     .agg(lambda x: x.value_counts().idxmax())
                     .rename("PRIORIDAD_LOTE")
                 )
