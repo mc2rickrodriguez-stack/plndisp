@@ -824,7 +824,12 @@ def run_loteo(df_data, df_cap, params,
         except Exception:
             pass
 
-        stranded=work[work["LBS_RESTANTES"]>1e-9].sort_values("LBS_RESTANTES",ascending=False)
+        stranded=work[work["LBS_RESTANTES"]>1e-9].copy()
+        # En el rescue, los VENCIDOS van primero como seeds (misma lógica que el loop principal)
+        # Esto garantiza que el seed sea siempre el bloque más urgente
+        urgencia_bloque = {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}
+        stranded["_urg"] = stranded["BLOQUE"].map(lambda b: urgencia_bloque.get(b,9))
+        stranded = stranded.sort_values(["_urg","LBS_RESTANTES"], ascending=[True,False])
         for seed_idx in stranded.index:
             if cancel_flag and cancel_flag[0]: break
             lbs_restante = float(work.at[seed_idx,"LBS_RESTANTES"])
