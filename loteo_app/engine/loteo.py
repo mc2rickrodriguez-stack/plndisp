@@ -277,6 +277,11 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
     _pen_ancho = float(params.get("PENALIZACION_ANCHO_EXTRA", 1.5))
     _pen_lnk   = float(params.get("PENALIZACION_LNK_EXTRA",   0.8))
 
+    # Prioridad vencidos: si el seed es VENCIDO, bonificar fuertemente a otros
+    # VENCIDOS para que se agrupen primero entre sí antes de mezclar con AHEAD.
+    seed_bloque = work.at[seed_idx, "BLOQUE"]
+    _bonus_vencido = 1e6 if seed_bloque == "VENCIDOS" else 0.0
+
     while True:
         remaining=max_allowed-lote_lbs
         if remaining<=1e-6: break
@@ -300,6 +305,11 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
             widths_add=set(float(w) for w in width_cache.get(idx,[]) if w and float(w)!=0.0)
             combo_bonus=1e-3 if (combo_target and any(abs(w-combo_target)<1e-6 for w in widths_add)) else 0
             sc=lote_lbs+tk+combo_bonus
+
+            # VENCIDOS primero: si el seed es VENCIDO, bonificar fuertemente
+            # a otros VENCIDOS para que se agrupen antes de mezclar con AHEAD
+            if _bonus_vencido > 0 and work.at[idx,"BLOQUE"] == "VENCIDOS":
+                sc += _bonus_vencido
 
             # PREFERIR_LOTES_SIMPLES: penalize adding new widths or new LNKs
             if _preferir_simples:
@@ -515,7 +525,14 @@ def run_loteo(df_data, df_cap, params,
                 cand=work[(work["BLOQUE"]==b)&(work["LBS_RESTANTES"]>0)]
                 if len(cand)==0: blocked.add(b); continue
 
-                top_seeds=cand.sort_values("LBS_RESTANTES",ascending=False).head(beam_w).index.tolist()
+                # Seeds: VENCIDOS primero (aunque tengan pocas LBS),
+                # luego el resto por LBS descendente.
+                # Garantiza que los vencidos pequeños tengan oportunidad
+                # de ser seeds y agruparse entre sí antes de mezclar con AHEAD.
+                cand_venc  = cand[cand["BLOQUE"]=="VENCIDOS"].sort_values("LBS_RESTANTES", ascending=False)
+                cand_otros = cand[cand["BLOQUE"]!="VENCIDOS"].sort_values("LBS_RESTANTES", ascending=False)
+                cand_ord   = pd.concat([cand_venc, cand_otros])
+                top_seeds  = cand_ord.head(beam_w).index.tolist()
                 best_lote=None; best_pack=None; best_score=-1e30
 
                 for seed_idx in top_seeds:
