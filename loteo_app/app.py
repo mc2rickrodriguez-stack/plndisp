@@ -279,6 +279,8 @@ def export_excel(result):
         if not df_stk.empty: df_stk.to_excel(w,index=False,sheet_name="STOCK_TEJIDO")
         df_oci = result.get("tejido_ocioso", pd.DataFrame())
         if not df_oci.empty: df_oci.to_excel(w,index=False,sheet_name="TEJIDO_SIN_DEMANDA")
+        df_na = result.get("no_asig", pd.DataFrame())
+        if not df_na.empty: df_na.to_excel(w,index=False,sheet_name="NO_ASIGNADOS")
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -932,7 +934,7 @@ if run_btn and can_run:
               st.stop()
           _dispon = st.session_state.dispon_index
 
-      df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock,df_ocioso=run_loteo(
+      df_det,df_res,df_exc,df_par,cancelled,df_tej,df_stock,df_ocioso,df_no_asig=run_loteo(
           df_data2,df_cap2,params2,progress_callback=cb,
           cancel_flag=st.session_state.cancel_flag,
           dispon_index=_dispon)
@@ -956,6 +958,7 @@ if run_btn and can_run:
           "params_out":df_par,
           "detalle_tejido":df_tej,"stock_tejido":df_stock,
           "tejido_ocioso":df_ocioso,
+          "no_asig":df_no_asig,
           "reports":build_reports(df_data2,df_cap2,df_det,df_res),
           "cancelled":cancelled}
   st.session_state.last_result=result
@@ -1274,6 +1277,23 @@ with tab_e:
     else:
         st.warning(f"⚠️ {len(df_exc):,} filas sin asignar")
         st.dataframe(df_exc,use_container_width=True,height=420)
+
+    # Diagnóstico de no-asignación por LNK
+    df_na_view = res.get("no_asig", pd.DataFrame())
+    if not df_na_view.empty:
+        st.divider()
+        st.markdown("#### 🔍 Motivo de no asignación por LNK")
+        # Filtros rápidos
+        _na_col1, _na_col2, _na_col3 = st.columns(3)
+        _na_motivos = _na_col1.multiselect("MOTIVO", sorted(df_na_view["MOTIVO"].unique()), key="na_motivo")
+        _na_bloques = _na_col2.multiselect("BLOQUE", sorted(df_na_view["BLOQUE"].unique()), key="na_bloque")
+        _na_mix     = _na_col3.multiselect("MIX",    sorted(df_na_view["MIX"].unique()),    key="na_mix")
+        df_na_f = df_na_view.copy()
+        if _na_motivos: df_na_f = df_na_f[df_na_f["MOTIVO"].isin(_na_motivos)]
+        if _na_bloques: df_na_f = df_na_f[df_na_f["BLOQUE"].isin(_na_bloques)]
+        if _na_mix:     df_na_f = df_na_f[df_na_f["MIX"].isin(_na_mix)]
+        st.caption(f"{len(df_na_f):,} LNKs sin asignar · {df_na_f['LBS_RESTANTES'].sum():,.0f} LBS restantes")
+        st.dataframe(df_na_f, use_container_width=True, height=420)
 
 with tab_t:
     df_tej = res.get("detalle_tejido", pd.DataFrame())
