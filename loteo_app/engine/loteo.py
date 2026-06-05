@@ -864,6 +864,40 @@ def run_loteo(df_data, df_cap, params,
                     width_cache, require_two_widths=False,
                     split_min_lbs=global_split_min)
                 if intento is not None:
+                    # ── Modo restricción: validar y asignar tejido ──────────
+                    lote_face_rescue = None
+                    plan_tejido_rescue: dict = {}
+
+                    if modo_restriccion:
+                        lnk_rows_rescue = []
+                        seen_rescue: set = set()
+                        lbs_por_lnk_rescue: dict = {}
+                        for idx2, lbs_asig2, *_ in intento["ROWS"]:
+                            lnk_id2 = work.at[idx2, "LNK"]
+                            lbs_por_lnk_rescue[lnk_id2] = lbs_por_lnk_rescue.get(lnk_id2, 0.0) + float(lbs_asig2)
+                        for idx2, lbs_asig2, *_ in intento["ROWS"]:
+                            lnk_id2 = work.at[idx2, "LNK"]
+                            if lnk_id2 in seen_rescue: continue
+                            seen_rescue.add(lnk_id2)
+                            row2 = work.loc[idx2].copy()
+                            suma_lb = sum(max(0.0, float(row2.get(c, 0) or 0))
+                                         for c in ["LB.CUERPO","LB.MANGAS","LB.RIB","LB.POCKET"])
+                            ratio = lbs_por_lnk_rescue.get(lnk_id2, float(lbs_asig2)) / suma_lb if suma_lb > 1e-9 else 1.0
+                            for lbs_col in ["LB.CUERPO","LB.MANGAS","LB.RIB","LB.POCKET"]:
+                                if lbs_col in row2.index:
+                                    try: row2[lbs_col] = float(row2[lbs_col]) * ratio
+                                    except: pass
+                            lnk_rows_rescue.append(row2)
+
+                        resultado_lf = dispon_index.elegir_lote_face_lote(
+                            lnk_rows_rescue, bloque="OTROS"
+                        )
+                        if resultado_lf is None:
+                            intento = None   # sin tejido → no formar el lote rescue
+                        else:
+                            lote_face_rescue, plan_tejido_rescue = resultado_lf
+
+                if intento is not None:
                     lote_id=f"L{lote_id_global:06d}"; lote_id_global+=1
                     anchos_lote=intento["FINAL_WIDTHS"]; anchos_lote_str=str(anchos_lote)
                     for idx,lbs_asig,oe,us in intento["ROWS"]:
@@ -888,8 +922,18 @@ def run_loteo(df_data, df_cap, params,
                             "PERMITIR_RANGO_SUPERIOR":0,
                             "SPLIT_MIN_USADO":0.0,
                             "DECISION_SCORE":0.0,
+                            "LOTE_FACE": lote_face_rescue or "",
+                            "DIA_MAX_LOTE": None,
                         })
                         work.at[idx,"LBS_RESTANTES"]=max(0.0,float(work.at[idx,"LBS_RESTANTES"])-float(lbs_asig))
+                    # Consumir tejido del rescue
+                    if modo_restriccion and plan_tejido_rescue:
+                        lnks_consumidos_rescue: set = set()
+                        for idx2, *_ in intento["ROWS"]:
+                            lnk_id2 = work.at[idx2, "LNK"]
+                            if lnk_id2 not in lnks_consumidos_rescue and lnk_id2 in plan_tejido_rescue:
+                                dispon_index.consume(plan_tejido_rescue[lnk_id2], lote_id)
+                                lnks_consumidos_rescue.add(lnk_id2)
                     det_lote=[d for d in detalle if d["LOTE_ID"]==lote_id]
                     bloques=[d["BLOQUE"] for d in det_lote]
                     bloques_unicos = sorted(set(bloques), key=lambda b: {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}.get(b,9))
@@ -910,6 +954,8 @@ def run_loteo(df_data, df_cap, params,
                         "PRIORIDAD_OBJETIVO":None,
                         "QUALITY_LEVEL":quality_level,
                         "BEAM_WIDTH_USADO":beam_w,
+                        "LOTE_FACE": lote_face_rescue or "",
+                        "DIA_MAX_LOTE": None,
                     })
                     capacity_used[intento["RANGO_ID"]]+=float(intento["TOTAL_LOTE"])
                     lotes_formados+=1; lbs_procesadas+=float(intento["TOTAL_LOTE"])
@@ -953,7 +999,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.6-scrap-fix"],
+        ["LOTEO_VERSION","v5.7-rescue-tejido"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
