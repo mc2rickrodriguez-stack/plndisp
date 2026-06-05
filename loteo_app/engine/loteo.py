@@ -579,6 +579,17 @@ def run_loteo(df_data, df_cap, params,
                             continue   # sin tejido disponible para este seed
                     else:
                         lnk_disp_seed = None
+
+                    # ── Pre-scrap: residuos pequeños de LNKs grandes ─────────
+                    # Si el seed tiene menos LBS que SPLIT_MIN pero el LNK
+                    # original era grande, es un residuo — va a SCRAP, no a un lote.
+                    _seed_rest = float(work.at[seed_idx,"LBS_RESTANTES"])
+                    _seed_orig = float(work.at[seed_idx,"TOTAL"]) if "TOTAL" in work.columns else _seed_rest
+                    _smin = float(rango_param(ranges_mix[0], "SPLIT_MIN_LBS", params, 100.0))
+                    if _seed_rest < _smin and _seed_orig >= _smin:
+                        work.at[seed_idx,"LBS_SCRAP"] += _seed_rest
+                        work.at[seed_idx,"LBS_RESTANTES"] = 0.0
+                        continue
                     ranges_try,rule_info=reorder_ranges_for_seed(
                         ranges_mix,mixv,work,seed_idx,params,width_cache)
 
@@ -942,7 +953,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.5-rescue-fix"],
+        ["LOTEO_VERSION","v5.6-scrap-fix"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
