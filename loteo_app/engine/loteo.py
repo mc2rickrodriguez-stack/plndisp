@@ -462,8 +462,8 @@ def run_loteo(df_data, df_cap, params,
     dispon_index: DisponibilidadIndex para modo restricción de tejido.
                   None = modo libre (comportamiento original).
     Returns (df_detalle, df_resumen, df_excedentes, df_params, cancelled:bool,
-             df_detalle_tejido, df_stock_report, df_tejido_ocioso)
-    Los tres últimos son DataFrames vacíos en modo libre.
+             df_detalle_tejido, df_stock_report, df_tejido_ocioso, df_no_asig)
+    Los últimos cuatro son DataFrames vacíos en modo libre.
     """
     modo_restriccion = dispon_index is not None
 
@@ -1025,7 +1025,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.10-lnk-priority"],
+        ["LOTEO_VERSION","v5.11-decision-log"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
@@ -1056,7 +1056,83 @@ def run_loteo(df_data, df_cap, params,
         df_stock_report   = pd.DataFrame()
         df_tejido_ocioso  = pd.DataFrame()
 
-    return df_det, df_res, exced, df_par, cancelled, df_detalle_tejido, df_stock_report, df_tejido_ocioso
+    # ── Reporte de no-asignación por LNK ─────────────────────────────────────
+    rows_no_asig = []
+
+    # 1. LNKs sin disponibilidad de tejido (modo restricción)
+    if modo_restriccion and len(data_sin_dispon) > 0:
+        agg_cols = {c:"first" for c in ["TELA.CUERPO","PRIORIDAD","BLOQUE","MIX"]}
+        agg_cols.update({"TOTAL":"sum","LBS_RESTANTES":"sum"})
+        sin_disp_lnk = data_sin_dispon.groupby("LNK", as_index=False).agg(
+            {k:v for k,v in agg_cols.items() if k in data_sin_dispon.columns}
+        )
+        for _, row in sin_disp_lnk.iterrows():
+            rows_no_asig.append({
+                "LNK":          row["LNK"],
+                "TELA.CUERPO":  row.get("TELA.CUERPO",""),
+                "PRIORIDAD":    row.get("PRIORIDAD",""),
+                "BLOQUE":       row.get("BLOQUE",""),
+                "MIX":          row.get("MIX",""),
+                "LBS_PLAN":     float(row.get("TOTAL",0)),
+                "LBS_ASIGNADAS":0.0,
+                "LBS_RESTANTES":float(row.get("LBS_RESTANTES",0)),
+                "LBS_SCRAP":    0.0,
+                "MOTIVO":       "SIN_DISPONIBILIDAD_TEJIDO",
+                "DETALLE":      "No hay inventario ni producción planeada para el DG requerido",
+            })
+
+    # 2. LNKs en excedentes del loteo (capacidad agotada, sin rango, residuos)
+    lnks_sin_dispon_set = {r["LNK"] for r in rows_no_asig}
+    if not exced.empty:
+        agg_cols2 = {c:"first" for c in ["TELA.CUERPO","PRIORIDAD","BLOQUE","MIX"]}
+        agg_cols2.update({"LBS_RESTANTES":"sum","LBS_SCRAP":"sum"})
+        if "TOTAL" in exced.columns: agg_cols2["TOTAL"] = "sum"
+        exced_lnk = exced.groupby("LNK", as_index=False).agg(
+            {k:v for k,v in agg_cols2.items() if k in exced.columns}
+        )
+        for _, row in exced_lnk.iterrows():
+            lnk = row["LNK"]
+            if lnk in lnks_sin_dispon_set:
+                continue
+            lbs_asig  = float(df_det[df_det["LNK"]==lnk]["LBS_ASIGNADAS"].sum()) if not df_det.empty else 0.0
+            lbs_rest  = float(row.get("LBS_RESTANTES", 0))
+            lbs_scrap = float(row.get("LBS_SCRAP", 0))
+            lbs_plan  = lbs_asig + lbs_rest + lbs_scrap
+
+            if lbs_asig > 0:
+                motivo  = "ASIGNADO_PARCIALMENTE"
+                detalle = f"Asignado {lbs_asig:.0f} LBS, quedan {lbs_rest:.0f} LBS sin rango"
+            elif lbs_scrap > 0:
+                motivo  = "RESIDUO_SCRAP"
+                detalle = f"Residuo de {lbs_scrap:.0f} LBS menor al SPLIT_MIN — enviado a scrap"
+            else:
+                motivo  = "SIN_RANGO_VALIDO"
+                detalle = "No encontró rango de capacidad disponible compatible"
+
+            rows_no_asig.append({
+                "LNK":          lnk,
+                "TELA.CUERPO":  row.get("TELA.CUERPO",""),
+                "PRIORIDAD":    row.get("PRIORIDAD",""),
+                "BLOQUE":       row.get("BLOQUE",""),
+                "MIX":          row.get("MIX",""),
+                "LBS_PLAN":     lbs_plan,
+                "LBS_ASIGNADAS":lbs_asig,
+                "LBS_RESTANTES":lbs_rest,
+                "LBS_SCRAP":    lbs_scrap,
+                "MOTIVO":       motivo,
+                "DETALLE":      detalle,
+            })
+
+    df_no_asig = pd.DataFrame(rows_no_asig) if rows_no_asig else pd.DataFrame(columns=[
+        "LNK","TELA.CUERPO","PRIORIDAD","BLOQUE","MIX",
+        "LBS_PLAN","LBS_ASIGNADAS","LBS_RESTANTES","LBS_SCRAP","MOTIVO","DETALLE"
+    ])
+    if not df_no_asig.empty:
+        urgencia_ord = {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}
+        df_no_asig["_urg"] = df_no_asig["BLOQUE"].map(lambda b: urgencia_ord.get(b,9))
+        df_no_asig = df_no_asig.sort_values(["_urg","MOTIVO","LNK"]).drop(columns=["_urg"]).reset_index(drop=True)
+
+    return df_det, df_res, exced, df_par, cancelled, df_detalle_tejido, df_stock_report, df_tejido_ocioso, df_no_asig
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────
