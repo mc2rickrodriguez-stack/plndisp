@@ -855,7 +855,74 @@ if run_btn and can_run:
       )
 
   try:
-      # Validar modo restricción antes de correr
+      # ── Validaciones antes de correr ─────────────────────────────────
+      errores = []
+      advertencias = []
+
+      # 1. Columnas obligatorias en DATA
+      cols_obligatorias = ["LNK","TELA.CUERPO","COLOR","MIX","PRIORIDAD","TOTAL",
+                           "ANCHO.F.C","ANCHO.F.M","CONSUMO_C","FAMILIA","COLOR_R","STYLE"]
+      cols_faltantes = [c for c in cols_obligatorias if c not in df_data2.columns]
+      if cols_faltantes:
+          errores.append(f"DATA le faltan columnas obligatorias: {', '.join(cols_faltantes)}")
+
+      # 2. Capacidades válidas
+      for _, row in df_cap2.iterrows():
+          cat = row.get("CATEGORIA","?")
+          try:
+              mn = float(row["MINIMO"]); mx = float(row["MAXIMO"]); cap = float(row["CAPACIDAD"])
+              mix = str(row.get("MIX","")).upper().strip()
+          except Exception:
+              errores.append(f"Categoría {cat}: valores no numéricos en MINIMO/MAXIMO/CAPACIDAD")
+              continue
+          if mn > mx:
+              errores.append(f"Categoría {cat}: MINIMO ({mn}) > MAXIMO ({mx})")
+          if cap <= 0:
+              errores.append(f"Categoría {cat}: CAPACIDAD debe ser > 0 (es {cap})")
+          if mix not in ("DYE","BLEACH"):
+              errores.append(f"Categoría {cat}: MIX debe ser DYE o BLEACH (es '{mix}')")
+          if "MAX_WIDTHS" in row and not pd.isna(row["MAX_WIDTHS"]) and int(row["MAX_WIDTHS"]) < 1:
+              errores.append(f"Categoría {cat}: MAX_WIDTHS debe ser >= 1")
+          if "MAX_SKU" in row and not pd.isna(row["MAX_SKU"]) and int(row["MAX_SKU"]) < 1:
+              errores.append(f"Categoría {cat}: MAX_SKU debe ser >= 1")
+
+      # 3. Rangos duplicados (misma CATEGORIA+MIX)
+      if "CATEGORIA" in df_cap2.columns and "MIX" in df_cap2.columns:
+          dupes = df_cap2.groupby(["CATEGORIA","MIX"]).size()
+          for (cat, mix), n in dupes[dupes > 1].items():
+              errores.append(f"Rango duplicado: CATEGORIA={cat} MIX={mix} aparece {n} veces")
+
+      # 4. MIX inválido en DATA
+      if "MIX" in df_data2.columns:
+          mix_invalidos = sorted(
+              set(df_data2["MIX"].astype(str).str.upper().str.strip()) - {"DYE","BLEACH"}
+          )
+          if mix_invalidos:
+              errores.append(f"DATA contiene valores MIX inválidos: {', '.join(mix_invalidos)}. Solo se permite DYE o BLEACH.")
+      tol_s = float(params2.get("OVERSHOOT_TOL_PCT_SMALL", 0.05))
+      tol_l = float(params2.get("OVERSHOOT_TOL_PCT_LARGE", 0.02))
+      if tol_s > 0.5:
+          advertencias.append(f"OVERSHOOT_TOL_PCT_SMALL = {tol_s:.1%} parece muy alto (>50%)")
+      if tol_l > 0.5:
+          advertencias.append(f"OVERSHOOT_TOL_PCT_LARGE = {tol_l:.1%} parece muy alto (>50%)")
+
+      # 5. DATA no vacía
+      if len(df_data2) == 0:
+          errores.append("DATA está vacía — no hay órdenes para lotear")
+
+      # Mostrar errores y advertencias
+      if errores:
+          st.error("❌ **Errores de configuración — el loteo no puede ejecutarse:**")
+          for e in errores:
+              st.error(f"• {e}")
+          st.session_state.running = False
+          st.stop()
+
+      if advertencias:
+          for w in advertencias:
+              st.warning(f"⚠️ {w}")
+
+      # Validar modo restricción
       _dispon = None
       if st.session_state.modo_restriccion:
           if st.session_state.dispon_index is None:
@@ -1358,8 +1425,3 @@ st.download_button("⬇  Descargar Excel completo",data=export_excel(res),
                    file_name=f"RESULTADOS_LOTES_{ts}.xlsx",
                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                    use_container_width=True)
-
-with st.expander("📋  Sección prueba", expanded=True):
-    st.markdown('<div class="info-note">✏️ Edita la tabla y presiona <b>Aplicar cambios de capacidad</b>. '
-                'Los parámetros por fila sobreescriben los globales para ese tamaño de lote.</div>',
-                unsafe_allow_html=True)
