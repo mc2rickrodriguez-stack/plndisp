@@ -225,14 +225,14 @@ def intentar_lote_para_rango(work, seed_idx, rango, capacity_used, params,
     allow_scrap   = int(rango_param(rango,"SCRAP_REMAINDER",params,1))==1
 
     lote_rows=[]; lote_lbs=0.0; lote_lnks=set()
-    lote_blocks=[]; lote_widths=[]
-    rejects=[]
+    lote_blocks=[]; lote_widths=[]; rejects=[]
 
-    seed_tono = up(work.at[seed_idx,"TONO"]) if "TONO" in work.columns and pd.notna(work.at[seed_idx,"TONO"]) else ""
+    usar_tono = int(params.get("AGRUPAR_POR_TONO", 1)) == 1
+    seed_tono = up(work.at[seed_idx,"TONO"]) if usar_tono and "TONO" in work.columns and pd.notna(work.at[seed_idx,"TONO"]) else ""
 
     def can_add(idx, lbs_to_add):
         if lbs_to_add<=0: return False,""
-        if "TONO" in work.columns:
+        if usar_tono and "TONO" in work.columns:
             rt = up(work.at[idx,"TONO"]) if pd.notna(work.at[idx,"TONO"]) else ""
             if rt!=seed_tono: return False,"TONO_DISTINTO"
         lnk_candidato = work.at[idx,"LNK"]
@@ -518,8 +518,11 @@ def run_loteo(df_data, df_cap, params,
     block_order=["VENCIDOS","AHEAD","AHEAD2","OTROS"]
 
     group_keys=["TELA.CUERPO","MIX"]
-    if "TONO" in data.columns: group_keys.insert(1,"TONO")
-    else:                       group_keys.insert(1,"COLOR")
+    usar_tono = int(params.get("AGRUPAR_POR_TONO", 1)) == 1
+    if usar_tono and "TONO" in data.columns:
+        group_keys.insert(1,"TONO")
+    else:
+        group_keys.insert(1,"COLOR")
 
     groups=list(data.groupby(group_keys).groups.items())
     total_groups=len(groups)
@@ -867,6 +870,7 @@ def run_loteo(df_data, df_cap, params,
                     # ── Modo restricción: validar y asignar tejido ──────────
                     lote_face_rescue = None
                     plan_tejido_rescue: dict = {}
+                    dia_max_rescue = None
 
                     if modo_restriccion:
                         lnk_rows_rescue = []
@@ -889,13 +893,21 @@ def run_loteo(df_data, df_cap, params,
                                     except: pass
                             lnk_rows_rescue.append(row2)
 
+                        urgencia_rescue = {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}
+                        bloques_intento = [work.at[idx2,"BLOQUE"] for idx2,*_ in intento["ROWS"]]
+                        bloque_rescue = min(bloques_intento, key=lambda x: urgencia_rescue.get(x,9)) if bloques_intento else "OTROS"
                         resultado_lf = dispon_index.elegir_lote_face_lote(
-                            lnk_rows_rescue, bloque="OTROS"
+                            lnk_rows_rescue, bloque=bloque_rescue
                         )
                         if resultado_lf is None:
                             intento = None   # sin tejido → no formar el lote rescue
                         else:
                             lote_face_rescue, plan_tejido_rescue = resultado_lf
+                            dia_max_v = max(
+                                (v.dia_maximo_lote for v in plan_tejido_rescue.values()),
+                                default=-1
+                            )
+                            dia_max_rescue = max(0, dia_max_v + 1) if dia_max_v >= 0 else 0
 
                 if intento is not None:
                     lote_id=f"L{lote_id_global:06d}"; lote_id_global+=1
@@ -923,7 +935,7 @@ def run_loteo(df_data, df_cap, params,
                             "SPLIT_MIN_USADO":0.0,
                             "DECISION_SCORE":0.0,
                             "LOTE_FACE": lote_face_rescue or "",
-                            "DIA_MAX_LOTE": None,
+                            "DIA_MAX_LOTE": dia_max_rescue,
                         })
                         work.at[idx,"LBS_RESTANTES"]=max(0.0,float(work.at[idx,"LBS_RESTANTES"])-float(lbs_asig))
                     # Consumir tejido del rescue
@@ -955,7 +967,7 @@ def run_loteo(df_data, df_cap, params,
                         "QUALITY_LEVEL":quality_level,
                         "BEAM_WIDTH_USADO":beam_w,
                         "LOTE_FACE": lote_face_rescue or "",
-                        "DIA_MAX_LOTE": None,
+                        "DIA_MAX_LOTE": dia_max_rescue,
                     })
                     capacity_used[intento["RANGO_ID"]]+=float(intento["TOTAL_LOTE"])
                     lotes_formados+=1; lbs_procesadas+=float(intento["TOTAL_LOTE"])
@@ -999,7 +1011,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.7-rescue-tejido"],
+        ["LOTEO_VERSION","v5.9-rescue-full"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
@@ -1009,10 +1021,8 @@ def run_loteo(df_data, df_cap, params,
 
         # Enriquecer DETALLE_TEJIDO con columnas de contexto
         if not df_detalle_tejido.empty:
-            # LBS_TOTAL_LOTE: suma de LBS asignadas por lote en tejido
             lbs_x_lote = df_detalle_tejido.groupby("LOTE_ID")["LBS_ASIGNADAS"].sum().rename("LBS_TOTAL_LOTE")
             df_detalle_tejido = df_detalle_tejido.merge(lbs_x_lote, on="LOTE_ID", how="left")
-            # PRIORIDAD_LOTE: bloque dominante del lote tomado de DETALLE_LOTES
             if not df_det.empty and "LOTE_ID" in df_det.columns and "BLOQUE" in df_det.columns:
                 prio_map = (
                     df_det.groupby("LOTE_ID")["BLOQUE"]
@@ -1020,6 +1030,13 @@ def run_loteo(df_data, df_cap, params,
                     .rename("PRIORIDAD_LOTE")
                 )
                 df_detalle_tejido = df_detalle_tejido.merge(prio_map, on="LOTE_ID", how="left")
+
+        # Fix 2: validación final — alerta si quedan lotes sin trazabilidad de tejido
+        lotes_con_tej = set(df_detalle_tejido["LOTE_ID"].unique()) if not df_detalle_tejido.empty else set()
+        lotes_total   = set(df_res["LOTE_ID"].unique()) if not df_res.empty else set()
+        n_sin_tej = len(lotes_total - lotes_con_tej)
+        alerta_tej = f"⚠️ {n_sin_tej} lotes sin trazabilidad de tejido" if n_sin_tej > 0 else "✅ Todos los lotes tienen trazabilidad de tejido"
+        df_par = pd.concat([df_par, pd.DataFrame([["ALERTA_TEJIDO", alerta_tej]], columns=["PARAMETRO","VALOR"])], ignore_index=True)
     else:
         df_detalle_tejido = pd.DataFrame()
         df_stock_report   = pd.DataFrame()
