@@ -475,6 +475,18 @@ def run_loteo(df_data, df_cap, params,
     data["LBS_RESTANTES"]= data["TOTAL"].astype(float)
     data["LBS_SCRAP"]    = 0.0
 
+    # ── Fix: LNK con split de prioridad → usar bloque más urgente ────────
+    # Un mismo LNK puede tener filas con VENCIDOS y AHEAD2 por split.
+    # Todas las filas del mismo LNK deben usar el bloque más urgente.
+    # Se conserva BLOQUE_ORIGINAL para trazabilidad en DETALLE_LOTES.
+    urgencia_bloque_map = {"VENCIDOS":0,"AHEAD":1,"AHEAD2":2,"OTROS":3}
+    data["BLOQUE_ORIGINAL"] = data["BLOQUE"]
+    lnk_bloque_urgente = (
+        data.groupby("LNK")["BLOQUE"]
+        .apply(lambda x: min(x, key=lambda b: urgencia_bloque_map.get(b, 9)))
+    )
+    data["BLOQUE"] = data["LNK"].map(lnk_bloque_urgente)
+
     # ── Pre-compute width cache (major speedup) ──────────────────────────
     width_cache = {}
     for idx in data.index:
@@ -748,6 +760,7 @@ def run_loteo(df_data, df_cap, params,
                         "TONO":work.at[idx,"TONO"] if "TONO" in work.columns else "",
                         "LNK":lnk_id,"PRIORIDAD":work.at[idx,"PRIORIDAD"],
                         "BLOQUE":work.at[idx,"BLOQUE"],
+                        "BLOQUE_ORIGINAL":work.at[idx,"BLOQUE_ORIGINAL"] if "BLOQUE_ORIGINAL" in work.columns else work.at[idx,"BLOQUE"],
                         "ANCHO.F.C":float(work.at[idx,"ANCHO.F.C"]),
                         "ANCHO.F.M":float(work.at[idx,"ANCHO.F.M"]),
                         "CONSUMO_C":float(work.at[idx,"CONSUMO_C"]),
@@ -920,6 +933,7 @@ def run_loteo(df_data, df_cap, params,
                             "TONO":work.at[idx,"TONO"] if "TONO" in work.columns else "",
                             "LNK":work.at[idx,"LNK"],"PRIORIDAD":work.at[idx,"PRIORIDAD"],
                             "BLOQUE":work.at[idx,"BLOQUE"],
+                        "BLOQUE_ORIGINAL":work.at[idx,"BLOQUE_ORIGINAL"] if "BLOQUE_ORIGINAL" in work.columns else work.at[idx,"BLOQUE"],
                             "ANCHO.F.C":float(work.at[idx,"ANCHO.F.C"]),
                             "ANCHO.F.M":float(work.at[idx,"ANCHO.F.M"]),
                             "CONSUMO_C":float(work.at[idx,"CONSUMO_C"]),
@@ -1011,7 +1025,7 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.9-rescue-full"],
+        ["LOTEO_VERSION","v5.10-lnk-priority"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
