@@ -850,7 +850,8 @@ def run_loteo(df_data, df_cap, params,
                     work,seed_idx,r,capacity_used,params,
                     {"regla_aplicada":"NONE","prioridades":[],"match_combo":False,
                      "limite_ancho_style":None,"origen_prioridad":"RESCUE","combo_target_width":None},
-                    width_cache, require_two_widths=False, split_min_lbs=0.0)
+                    width_cache, require_two_widths=False,
+                    split_min_lbs=global_split_min)
                 if intento is not None:
                     lote_id=f"L{lote_id_global:06d}"; lote_id_global+=1
                     anchos_lote=intento["FINAL_WIDTHS"]; anchos_lote_str=str(anchos_lote)
@@ -941,7 +942,6 @@ def run_loteo(df_data, df_cap, params,
         ["APPLY_RULES_BLEACH",params.get("APPLY_RULES_BLEACH",0)],
         ["OVERSHOOT_SMALL_THRESHOLD",params.get("OVERSHOOT_SMALL_THRESHOLD",5000)],
         ["AGRUPAR_POR_TONO",params.get("AGRUPAR_POR_TONO",1)],
-        ["LOTEO_VERSION","v5.4-fixes"],
     ],columns=["PARAMETRO","VALOR"])
 
     # Reportes de tejido (vacíos en modo libre)
