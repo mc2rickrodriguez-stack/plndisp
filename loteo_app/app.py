@@ -370,16 +370,25 @@ with st.sidebar:
     cfg=st.session_state.cfg or {}
     def cv(k,d): return cfg.get(k,p.get(k,d))
 
+    # Helpers para tolerancias: JSON/motor usa 0.05, UI muestra 5.0
+    def pct_to_ui(v, default=5.0):
+        v = float(v) if v is not None else default
+        return v * 100 if v <= 1.0 else v   # 0.05 → 5.0, 5.0 → 5.0
+
+    def pct_to_internal(v, default=5.0):
+        v = float(v) if v is not None else default
+        return v / 100 if v > 1.0 else v    # 5.0 → 0.05, 0.05 → 0.05
+
     st.subheader("⚙️ Ajustes avanzados")
     with st.expander("Overshoot / Undershoot"):
         overshoot  =st.checkbox("OVERSHOOT_ENABLE",  value=bool(int(cv("OVERSHOOT_ENABLE",1))))
         undershoot =st.checkbox("UNDERSHOOT_ENABLE", value=bool(int(cv("UNDERSHOOT_ENABLE",1))))
         tol_small  =st.number_input("Tolerancia % órdenes pequeñas",
-                                    value=float(cv("OVERSHOOT_TOL_PCT_SMALL",5)),
+                                    value=pct_to_ui(cv("OVERSHOOT_TOL_PCT_SMALL", 0.05)),
                                     min_value=0.0,max_value=50.0,step=0.5,
                                     help="% de tolerancia para órdenes ≤ umbral")
         tol_large  =st.number_input("Tolerancia % órdenes grandes",
-                                    value=float(cv("OVERSHOOT_TOL_PCT_LARGE",2)),
+                                    value=pct_to_ui(cv("OVERSHOOT_TOL_PCT_LARGE", 0.02)),
                                     min_value=0.0,max_value=50.0,step=0.5)
         tol_thr    =st.number_input("Umbral pequeña/grande (LBS)",
                                     value=float(cv("OVERSHOOT_SMALL_THRESHOLD",5000)),step=500.0)
@@ -422,7 +431,7 @@ with st.sidebar:
 
     adv_overrides={
         "OVERSHOOT_ENABLE":int(overshoot),"UNDERSHOOT_ENABLE":int(undershoot),
-        "OVERSHOOT_TOL_PCT_SMALL":tol_small/100,"OVERSHOOT_TOL_PCT_LARGE":tol_large/100,
+        "OVERSHOOT_TOL_PCT_SMALL":pct_to_internal(tol_small),"OVERSHOOT_TOL_PCT_LARGE":pct_to_internal(tol_large),
         "OVERSHOOT_SMALL_THRESHOLD":tol_thr,
         "LOOKAHEAD_VENCIDOS":int(lookahead),
         "PREFERIR_LOTES_SIMPLES":int(simples),
